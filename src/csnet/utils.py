@@ -12,6 +12,18 @@ from typing import Any, Iterator
 import numpy as np
 
 
+def stable_hash(text: str) -> int:
+    """A process-stable 32-bit hash of a string.
+
+    Python randomises ``hash()`` on strings per process via PYTHONHASHSEED, so using it to
+    derive a seed makes "deterministic given a seed" quietly false -- two runs of the same
+    command produce different data. CRC32 is stable across processes, machines and versions.
+    """
+    import zlib
+
+    return int(zlib.crc32(text.encode("utf-8")) & 0xFFFFFFFF)
+
+
 def seed_everything(seed: int = 72, deterministic: bool = False) -> None:
     """Seed python, numpy and torch (cpu + cuda)."""
     random.seed(seed)

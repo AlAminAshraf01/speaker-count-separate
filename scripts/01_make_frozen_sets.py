@@ -46,7 +46,7 @@ def main() -> int:
     from csnet.audio import write_wav
     from csnet.constants import SR
     from csnet.mixing import (read_recipes, render_recipe, sample_recipe, write_recipes)
-    from csnet.utils import format_table
+    from csnet.utils import format_table, stable_hash
 
     store_root = require_store(args)
     out_dir = resolve(args.out) or args.out
@@ -70,7 +70,9 @@ def main() -> int:
             store, bank = build_store_and_bank(store_root, split, noise_store=resolve(args.noise_store))
             print(f"\n[{split}] {len(store)} utterances / {len(store.speakers)} target "
                   f"speakers / {bank.describe()}")
-            rng = np.random.default_rng([int(args.seed), abs(hash(split)) % (2 ** 31)])
+            # stable_hash, not hash(): python randomises string hashing per process,
+            # which would make the "frozen" set different on every run despite --seed.
+            rng = np.random.default_rng([int(args.seed), stable_hash(split)])
             rows = []
             for n_src in args.n_list:
                 if n_src > len(store.speakers):

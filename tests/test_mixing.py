@@ -131,6 +131,47 @@ def test_store_round_trips_audio() -> None:
     assert checked > 0
 
 
+def test_seeding_is_stable_across_processes() -> None:
+    """A "frozen" set that changes between runs is not frozen.
+
+    Python randomises hash() on strings per process, so seeding an RNG with hash(split)
+    silently breaks reproducibility while still looking seeded. This guards the fix.
+    """
+    import subprocess
+    import sys as _sys
+
+    from csnet.utils import stable_hash
+
+    assert stable_hash("dev") == stable_hash("dev")
+    assert stable_hash("dev") != stable_hash("test")
+
+    # Two fresh interpreters must agree -- that is the part hash() fails.
+    code = ("import sys; sys.path.insert(0, r'%s');"
+            "from csnet.utils import stable_hash; print(stable_hash('dev'))"
+            % os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "src"))
+    outputs = {subprocess.run([_sys.executable, "-c", code], capture_output=True,
+                              text=True, check=True).stdout.strip() for _ in range(3)}
+    assert len(outputs) == 1, f"stable_hash differs between processes: {outputs}"
+
+
+def test_recipe_sampling_is_reproducible() -> None:
+    """Same seed -> same recipes; different seed -> different recipes."""
+    import numpy as _np
+
+    from csnet.mixing import sample_recipe
+
+    store, bank = store_and_bank()
+
+    def draw(seed: int) -> list:
+        rng = _np.random.default_rng([seed, 12345])
+        return [sample_recipe(store, bank, n, rng) for n in (1, 2, 3)]
+
+    a, b, c = draw(72), draw(72), draw(99)
+    for x, y in zip(a, b):
+        assert x == y, "same seed produced different recipes"
+    assert a != c, "different seeds produced identical recipes"
+
+
 CHECKS = {name: fn for name, fn in sorted(globals().items()) if name.startswith("test_")}
 
 if __name__ == "__main__":
