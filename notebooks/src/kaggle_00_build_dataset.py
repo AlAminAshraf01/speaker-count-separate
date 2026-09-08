@@ -4,7 +4,7 @@
 # **Accelerator: None (CPU).** This notebook spends **no GPU quota**. Do not enable a GPU;
 # you would burn 30 hours a week of quota on `soundfile`.
 #
-# **Runtime: 25-45 minutes** for the full corpus.
+# **Runtime: about 8-12 minutes** for the full corpus (~32,000 utterances, ~3.5 GB out).
 #
 # ## What this does
 #
@@ -62,7 +62,7 @@ for split in ("train-100", "dev", "test"):
     print(f"  {split:<10} {'ok' if os.path.isdir(path) else 'MISSING'}  {path}")
 
 # %% [markdown]
-# ## Step 1 - pack the sources  (~25-45 min)
+# ## Step 1 - pack the sources  (~8-12 min)
 #
 # Every utterance is stored as its **highest-energy 8-second window**. A random 3 s crop of a
 # LibriSpeech utterance often lands in silence, and a silent target makes SI-SDR undefined.

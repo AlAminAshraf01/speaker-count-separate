@@ -67,7 +67,7 @@ Do all seven now; it takes two minutes and saves confusion later.
 
 ---
 
-## 1. Notebook 00 — build the dataset · **CPU** · 25–45 min
+## 1. Notebook 00 — build the dataset · **CPU** · ~10 min
 
 > **Settings → Accelerator → None.** This notebook must not touch the GPU. Running it on a GPU
 > burns quota on `soundfile` and buys you nothing.
@@ -86,15 +86,30 @@ Run all cells. It will:
 
 ```
 split      utts   speakers  babble spk  hours  median s  size
-train-100  27800  251       50          ~40    ~6.5      ~2.9 GB
-dev         6000   40        8          ~9     ~6        ~0.5 GB
-test        6000   40        8          ~9     ~6        ~0.5 GB
+train-100  27800  201       50          ~57    8         ~3.1 GB
+dev         ~2250  32        8          ~3.7   ~5.9      ~0.2 GB
+test        ~2073  32        8          ~3.3   ~5.5      ~0.2 GB
 
 speaker disjointness across splits (must all be 0):
    train-100 & dev        shared speakers:    0  OK
    ...
 max |mix - (sum(sources) + noise)| over the test set: <1e-05   OK
 ```
+
+**Read those numbers before moving on**, because two of them surprise people:
+
+* **The `speakers` column counts *target* speakers only.** The 20 % held out for babble noise
+  are the next column. 201 + 50 = 251 and 32 + 8 = 40 are LibriMix's real speaker counts.
+* **dev and test hold far fewer utterances than train.** Libri2Mix's dev and test each use
+  3,000 mixtures x 2 = 6,000 source *slots*, but LibriSpeech dev-clean and test-clean only
+  contain 2,703 and 2,620 distinct utterances — so utterances repeat across mixtures there.
+  The packer de-duplicates, which is why you get roughly 2,250 and 2,073. That is correct.
+  train-100 is sampled without replacement, so it lands on exactly 27,800.
+* **`median s` of 8.0 in train-100** is `CAP_SECONDS` working: over half of train-clean-100's
+  utterances are longer than 8 s and were cropped to their highest-energy 8-second window.
+
+Sanity check the size against the hours: `hours x 3600 x 8000 x 2 bytes` should equal the
+reported size, because the store is raw int16 at 8 kHz with no header.
 
 ### Then publish it — two routes, pick one
 

@@ -26,7 +26,7 @@ If you just want the thing running on Kaggle, do this and read the rest later:
 
 | # | Notebook | Accelerator | Time | Runs |
 |---|---|---|---|---|
-| 0 | `kaggle_00_build_dataset.ipynb` | **None (CPU)** | 25–45 min | once, ever |
+| 0 | `kaggle_00_build_dataset.ipynb` | **None (CPU)** | ~10 min | once, ever |
 | 1 | `kaggle_01_eda_and_leak.ipynb` | **None (CPU)** | 10–20 min | once |
 | 2 | `kaggle_02_train.ipynb` | GPU T4 ×2 | 11 h × N sessions | resumable |
 | 3 | `kaggle_03_hparam_search.ipynb` | GPU T4 ×2 | 1.5–2.5 h | resumable |
