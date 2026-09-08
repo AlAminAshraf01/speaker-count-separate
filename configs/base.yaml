@@ -1,0 +1,78 @@
+# Shared defaults. Every other config inherits from this with `_base_: base.yaml`.
+# Override anything from the command line:  --set train.lr=5e-4 model.kernel=32
+name: csnet-base
+
+data:
+  # Auto-detected on Kaggle if you leave this and pass --store on the command line.
+  store_root: /kaggle/input/csnet-store
+  train_split: train-100
+  dev_split: dev
+  test_split: test
+  recipes_dir: data
+  recipes_dev: recipes_dev.csv
+  recipes_test: recipes_test.csv
+
+  seg_seconds: 3.0            # fixed-length crop: half of the anti-leak mitigation
+  n_list: [1, 2, 3, 4, 5]     # speaker counts to train on
+  n_weights: null             # null = uniform over n_list
+
+  gain_db_range: [-5.0, 5.0]  # per-source level jitter AFTER RMS normalisation
+  snr_db_range: [0.0, 20.0]   # speech-to-noise ratio
+  p_clean: 0.2                # fraction of training mixtures with no noise at all
+  min_crop_rms_ratio: 0.3     # reject crops that landed in silence
+
+  noise_kinds: [white, pink, brown, babble, real]
+  noise_weights: null         # null = uniform over the kinds that are actually available
+  noise_store: null           # optional separate store holding a real-noise corpus
+  mmap: true                  # false loads the whole split into RAM (faster, needs ~4 GB)
+
+model:
+  n_filters: 512              # N
+  kernel: 16                  # L   -- 32 halves the frame count and roughly doubles speed
+  bottleneck: 128             # B
+  hidden: 512                 # H
+  skip: 128                   # Sc
+  conv_kernel: 3              # P
+  n_blocks: 8                 # X
+  n_repeats: 3                # R
+  max_n_src: 5
+  predict_noise: true         # the dedicated noise slot
+  n_classes: 5                # must equal len(data.n_list)
+  mask_act: relu
+  norm: gLN
+  count_hidden: 128
+  count_dropout: 0.1
+  causal: false
+
+train:
+  batch_size: 12
+  lr: 1.0e-3
+  weight_decay: 1.0e-6
+  epochs: 60                  # a budget decision, not an ambition -- see docs/DESIGN.md
+  steps_per_epoch: 1000
+  num_workers: 2              # Kaggle GPU notebooks have 4 vCPU
+  amp: true                   # fp16 on T4; the loss body is forced back to fp32
+  grad_clip: 5.0
+  accum: 1
+  warmup_steps: 500
+  sched: cosine               # cosine | plateau | none
+  time_budget_h: 11.0         # stop cleanly before Kaggle's 12 h cap
+  seed: 72
+  dataparallel: true          # uses both T4s when the accelerator is "GPU T4 x2"
+  val_every: 1
+  val_batches: null           # null = the whole frozen dev set
+  ckpt_dir: /kaggle/working/ckpt
+  ckpt_every_steps: 400       # mid-epoch saves: a hard kill costs minutes, not hours
+  keep_last_k: 1
+  freeze_separator: false     # true + loss.w_sep 0 = train the count head alone (gate 6)
+  early_stop_patience: 0      # 0 disables
+  log_every: 100
+
+loss:
+  w_sep: 1.0
+  w_sil: 1.0                  # keeps surplus slots quiet; without it the count is meaningless
+  w_count: 0.5
+  w_noise: 0.2                # the noise slot
+  silence_db: -30.0
+  label_smoothing: 0.05
+  clamp_si_sdr: 30.0          # soft ceiling so one easy example cannot dominate a batch

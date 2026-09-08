@@ -1,0 +1,48 @@
+# --- generated data / artefacts -------------------------------------------------
+# The packed store is ~4 GB. Never commit it -- rebuild it with 00_pack_sources.py
+# or attach it on Kaggle as a private dataset.
+store/
+*.i16
+*.wav
+*.flac
+*.pt
+*.pth
+*.ckpt
+
+# Run outputs
+runs/
+ckpt/
+outputs/
+eda/
+eval/
+interpret/
+search/
+*.log
+train_log.csv
+history.json
+
+# --- what IS committed, deliberately --------------------------------------------
+# data/recipes_dev.csv and data/recipes_test.csv ARE committed. The frozen evaluation
+# sets are recipes, not audio (a few hundred kB), and version-controlling them is what
+# "freeze the test set" actually means. No *.csv rule above, so they are tracked --
+# this note exists so nobody "tidies up" by adding one. See data/README.md.
+
+# --- python ---------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+env/
+.pytest_cache/
+.ipynb_checkpoints/
+
+# --- editors / OS ---------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini

@@ -1,0 +1,25 @@
+# The headline run: Conv-TasNet's Table I hyperparameters, pooled N = 1..5, with noise.
+#
+# ~5.4 M parameters, ~10.6 GFLOP per second of audio.
+# On one T4 expect roughly 0.35-0.55 s per step at batch 12 -- measure it, do not guess;
+# 04_train.py times 20 real steps before it commits and prints what the budget buys.
+#
+#   python scripts/04_train.py --config configs/paper.yaml --store /kaggle/input/csnet-store
+_base_: base.yaml
+name: csnet-paper
+
+model:
+  n_filters: 512
+  kernel: 16
+  bottleneck: 128
+  hidden: 512
+  skip: 128
+  n_blocks: 8
+  n_repeats: 3
+
+train:
+  batch_size: 12
+  lr: 1.0e-3
+  epochs: 60
+  steps_per_epoch: 1000
+  warmup_steps: 500

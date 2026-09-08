@@ -1,0 +1,28 @@
+# Plumbing only. 0.3 M parameters -- runs on CPU, learns almost nothing.
+# Use it to prove the pipeline works before spending GPU quota:
+#
+#   python scripts/04_train.py --config configs/tiny.yaml --store ./store --dry_run
+_base_: base.yaml
+name: csnet-tiny
+
+model:
+  n_filters: 128
+  kernel: 32
+  bottleneck: 64
+  hidden: 128
+  skip: 64
+  n_blocks: 4
+  n_repeats: 2
+  count_hidden: 64
+
+train:
+  batch_size: 4
+  lr: 2.0e-3
+  epochs: 2
+  steps_per_epoch: 20
+  warmup_steps: 5
+  num_workers: 0
+  amp: false
+  dataparallel: false
+  ckpt_every_steps: 10
+  time_budget_h: 0.5

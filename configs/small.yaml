@@ -1,0 +1,25 @@
+# Fast preset for ablations, plumbing checks and anything you will run more than twice.
+#
+# ~1.9 M parameters, ~1.9 GFLOP/s of audio -- about 5x cheaper than `paper`, and the two
+# levers doing the work are kernel 32 (half the frames) and n_repeats 2.
+# Expect roughly 1 dB less SI-SDRi. Use it to find hyperparameters, then confirm on `paper`.
+#
+#   python scripts/04_train.py --config configs/small.yaml --store /kaggle/input/csnet-store
+_base_: base.yaml
+name: csnet-small
+
+model:
+  n_filters: 256
+  kernel: 32
+  bottleneck: 128
+  hidden: 256
+  skip: 128
+  n_blocks: 8
+  n_repeats: 2
+
+train:
+  batch_size: 24
+  lr: 1.5e-3
+  epochs: 40
+  steps_per_epoch: 800
+  warmup_steps: 300

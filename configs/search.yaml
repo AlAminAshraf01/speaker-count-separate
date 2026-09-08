@@ -1,0 +1,44 @@
+# Phase 3 -- the structured hyperparameter search space and its K-fold settings.
+#
+# Read the budget line before changing anything: every extra grid point costs
+# (folds x steps) of GPU time, and the free tier gives about 30 GPU-hours a week.
+# With the defaults below: 6 configs x 3 folds x 1500 steps of the `small` preset
+# is roughly 1.5-2.5 h. That is a deliberate, statable budget -- not a truncation.
+#
+#   python scripts/05_hparam_search.py --config configs/search.yaml --store /kaggle/input/csnet-store
+_base_: small.yaml
+name: csnet-search
+
+search:
+  # K-fold is over the DEV SPEAKER POOL, not over mixtures. A random k-fold on mixtures
+  # would put the same speaker on both sides of the fold and is not a valid fold here.
+  folds: 3
+  steps: 1500              # training steps per (config, fold) run
+  eval_batches: 40
+  seed: 72
+  strategy: grid           # grid | random
+  n_random: 8              # only used when strategy is random
+
+  # Each entry is a dotted config path and the values to try.
+  # The interesting question this answers is not just "which is best" but whether the
+  # optimum MOVES as the mixture densifies -- the paper never asks that.
+  grid:
+    model.n_blocks: [6, 8]
+    model.n_repeats: [2, 3]
+    model.bottleneck: [128]
+    model.n_filters: [256]
+    model.kernel: [32]
+    train.lr: [1.0e-3]
+
+  # Keep the total number of points honest. The script refuses to start a grid larger
+  # than this without --allow_big, because a 40-point grid will not finish.
+  max_points: 8
+
+train:
+  batch_size: 16
+  steps_per_epoch: 1500
+  epochs: 1
+  warmup_steps: 200
+  val_batches: 40
+  time_budget_h: 10.5
+  ckpt_every_steps: 100000   # per-run checkpoints are pointless in a search
