@@ -39,13 +39,13 @@ sys.path.insert(0, os.path.join(REPO, "scripts"))
 from _common import autodetect_store
 
 STORE = autodetect_store()
-DATA = "/kaggle/input/csnet-store/data"     # adjust if your attached path differs
-if not os.path.exists(os.path.join(DATA, "recipes_test.csv")):
-    import glob
-    hits = glob.glob("/kaggle/input/**/recipes_test.csv", recursive=True)
-    hits += glob.glob("/kaggle/working/**/recipes_test.csv", recursive=True)
-    hits += glob.glob(os.path.join(REPO, "data", "recipes_test.csv"))
-    DATA = os.path.dirname(hits[0]) if hits else DATA
+# Recursive globs, because Kaggle mounts inputs at /kaggle/input/<slug> on some
+# accounts and /kaggle/input/datasets/<owner>/<slug> on others.
+import glob
+hits = (glob.glob("/kaggle/input/**/recipes_test.csv", recursive=True)
+        + glob.glob("/kaggle/working/**/recipes_test.csv", recursive=True)
+        + glob.glob(os.path.join(REPO, "data", "recipes_test.csv")))
+DATA = os.path.dirname(hits[0]) if hits else None
 
 print("store   :", STORE)
 print("recipes :", DATA)

@@ -56,8 +56,11 @@ def main() -> int:
         raise SystemExit(
             "could not find Libri2Mix.\n"
             "  Expected a folder containing train-100/, dev/, test/ with s1/ and s2/ inside.\n"
-            "  On Kaggle: add the dataset 'unconscious/libri2mix-8khz-min', then pass\n"
-            "    --libri2mix_dir /kaggle/input/libri2mix-8khz-min/Libri2Mix/wav8k/min")
+            "  On Kaggle: + Add Input -> Datasets -> 'libri2mix-8khz-min' (by unconscious).\n"
+            "  The mount point differs between Kaggle layouts, so the search looks for the\n"
+            "  contents rather than a fixed path. If it still fails, locate it yourself:\n"
+            "    find /kaggle/input -maxdepth 7 -type d -name s1\n"
+            "  and pass the directory two levels above s1 as --libri2mix_dir.")
 
     out = resolve(args.out) or args.out
     os.makedirs(out, exist_ok=True)

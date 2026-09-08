@@ -35,7 +35,17 @@ The bootstrap cell tries the dataset first, then the clone, so both work unchang
 ### 0.2 Add the corpus
 
 **+ Add Input → Datasets →** search `libri2mix-8khz-min` (by *unconscious*, 9.96 GB, CC0).
-It mounts at `/kaggle/input/libri2mix-8khz-min/Libri2Mix/wav8k/min/`.
+
+Kaggle has changed where attached datasets appear, and may again. Both shapes are handled —
+`autodetect_libri2mix()` searches for the *contents* (`<split>/s1`) rather than assuming a path:
+
+| Layout | Mount point |
+|---|---|
+| older | `/kaggle/input/<slug>/Libri2Mix/wav8k/min` |
+| current | `/kaggle/input/datasets/<owner>/<slug>/Libri2Mix/wav8k/min` |
+
+So leave `LIBRI2MIX_DIR = autodetect_libri2mix()` alone. If it ever returns `None`, print the
+tree with the diagnostic in §8 and pass the path explicitly with `--libri2mix_dir`.
 
 ### 0.3 Optional — real background noise
 

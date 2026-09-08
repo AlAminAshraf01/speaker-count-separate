@@ -302,8 +302,10 @@ def main() -> int:
     print("2. Wait until the status stops saying it is processing.")
     print("3. In any notebook: + Add Input -> Datasets -> search for "
           f"'{slug}'.")
-    print(f"4. Confirm the structure survived, which Kaggle -- not this script -- decides:")
-    print(f"     python scripts/09_publish_dataset.py --verify /kaggle/input/{slug}")
+    print("4. Confirm the structure survived, which Kaggle -- not this script -- decides.")
+    print("   Find where it mounted (the layout has changed before), then verify:")
+    print(f"     python -c \"from _common import autodetect_store; print(autodetect_store())\"")
+    print(f"     python scripts/09_publish_dataset.py --verify <that path>")
     print("\nIf step 4 fails, the subdirectories were flattened. Re-upload with")
     print("  --dir_mode tar   (or just use the Save Version route instead).")
     print(f"\nOnce verified, every later script takes  --store /kaggle/input/{slug}")

@@ -27,38 +27,73 @@ def resolve(path: str | None, base: str = REPO_ROOT) -> str | None:
     return path if os.path.isabs(path) else os.path.normpath(os.path.join(base, path))
 
 
-def autodetect_libri2mix(hint: str | None = None) -> str | None:
-    """Find ``.../Libri2Mix/wav8k/min`` under a hint or the usual Kaggle input locations."""
-    candidates: list[str] = []
-    if hint:
-        candidates += [hint,
-                       os.path.join(hint, "Libri2Mix", "wav8k", "min"),
-                       os.path.join(hint, "wav8k", "min")]
-    for root in ("/kaggle/input",):
-        if os.path.isdir(root):
-            for name in sorted(os.listdir(root)):
-                base = os.path.join(root, name)
-                candidates += [os.path.join(base, "Libri2Mix", "wav8k", "min"),
-                               os.path.join(base, "wav8k", "min")]
-    for candidate in candidates:
-        if candidate and os.path.isdir(candidate) and any(
-                os.path.isdir(os.path.join(candidate, s)) for s in ("train-100", "dev", "test")):
-            return os.path.normpath(candidate)
+SPLIT_NAMES = ("train-100", "train-360", "dev", "test")
+# Directories that are always leaves in a LibriMix tree. Descending into them means
+# listing ~14k files for nothing, so the search prunes them.
+_LEAF_DIRS = {"mix_clean", "mix_both", "mix_single", "noise", "metadata",
+              *(f"s{i}" for i in range(1, 10))}
+
+
+def _looks_like_libri2mix(path: str) -> bool:
+    """True for a directory holding ``<split>/s1`` -- i.e. a ``wav8k/min`` root."""
+    return any(os.path.isdir(os.path.join(path, split, "s1")) for split in SPLIT_NAMES)
+
+
+def _looks_like_store(path: str) -> bool:
+    """True for a packed store: a manifest plus at least one packed split."""
+    if not os.path.exists(os.path.join(path, "manifest.json")):
+        return False
+    try:
+        entries = os.listdir(path)
+    except OSError:
+        return False
+    return any(os.path.exists(os.path.join(path, name, "index.csv")) for name in entries)
+
+
+def _search(roots: Sequence[str], predicate: Any, max_depth: int = 8) -> str | None:
+    """Bounded top-down search for the first directory satisfying ``predicate``.
+
+    Kaggle has changed its mount layout before -- datasets used to appear at
+    ``/kaggle/input/<slug>`` and now arrive at ``/kaggle/input/datasets/<owner>/<slug>``.
+    Rather than encode either shape, look for the *contents* we need. The walk is
+    top-down and returns on the first hit, so it never descends into the 14k-file
+    leaf directories underneath.
+    """
+    for root in roots:
+        if not root or not os.path.isdir(root):
+            continue
+        base_depth = os.path.abspath(root).rstrip(os.sep).count(os.sep)
+        for dirpath, dirnames, _files in os.walk(root):
+            if predicate(dirpath):
+                return os.path.normpath(dirpath)
+            depth = os.path.abspath(dirpath).count(os.sep) - base_depth
+            if depth >= max_depth:
+                dirnames[:] = []
+            else:  # prune known leaves and hidden dirs, in place
+                dirnames[:] = [d for d in sorted(dirnames)
+                               if d not in _LEAF_DIRS and not d.startswith(".")]
     return None
+
+
+def autodetect_libri2mix(hint: str | None = None) -> str | None:
+    """Find ``.../Libri2Mix/wav8k/min``, wherever Kaggle decided to mount it."""
+    for candidate in ([hint,
+                       os.path.join(hint, "Libri2Mix", "wav8k", "min"),
+                       os.path.join(hint, "wav8k", "min")] if hint else []):
+        if candidate and os.path.isdir(candidate) and _looks_like_libri2mix(candidate):
+            return os.path.normpath(candidate)
+    return _search(["/kaggle/input", "/kaggle/working"], _looks_like_libri2mix)
 
 
 def autodetect_store(hint: str | None = None) -> str | None:
     """Find a packed store (a directory containing ``manifest.json``)."""
-    candidates = [hint] if hint else []
-    if os.path.isdir("/kaggle/input"):
-        for name in sorted(os.listdir("/kaggle/input")):
-            base = os.path.join("/kaggle/input", name)
-            candidates += [base, os.path.join(base, "store")]
-    candidates += [os.path.join(REPO_ROOT, "store"), "/kaggle/working/store"]
-    for candidate in candidates:
-        if candidate and os.path.exists(os.path.join(candidate, "manifest.json")):
+    for candidate in ([hint, os.path.join(hint, "store")] if hint else []):
+        if candidate and _looks_like_store(candidate):
             return os.path.normpath(candidate)
-    return None
+    for candidate in (os.path.join(REPO_ROOT, "store"), "/kaggle/working/store"):
+        if _looks_like_store(candidate):
+            return os.path.normpath(candidate)
+    return _search(["/kaggle/input"], _looks_like_store)
 
 
 def build_store_and_bank(store_root: str, split: str, *, mmap: bool = True,
