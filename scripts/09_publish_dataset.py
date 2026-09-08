@@ -14,7 +14,7 @@ Notebook output              A real Dataset
 ===========================  ==========================================================
 zero setup                   needs an API token once
 "Save & Run All (Commit)"    created once, never recomputed
-re-runs the whole 45-minute
+re-runs the whole ~10-minute
 packing job
 mounts at                    mounts at ``/kaggle/input/<your-slug>``
 ``/kaggle/input/<slug>``     -- a name you chose and can rely on

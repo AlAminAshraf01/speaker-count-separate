@@ -166,7 +166,7 @@ for path in sorted(glob.glob("/kaggle/working/samples/test/**/*_mix.wav", recurs
 # | | **Route 1 - Save Version** | **Route 2 - a real Dataset** |
 # |---|---|---|
 # | Setup | none | an API token, once |
-# | Cost of publishing | **re-runs this whole notebook** (~45 min) | uploads the files (~10 min) |
+# | Cost of publishing | **re-runs this whole notebook** (~10 min) | uploads the files (~10 min) |
 # | Mounts at | `/kaggle/input/<notebook-slug>/store` | `/kaggle/input/csnet-store` |
 # | Attach with | + Add Input -> Notebook Output | + Add Input -> Datasets |
 #

@@ -76,7 +76,8 @@ Do all seven now; it takes two minutes and saves confusion later.
 
 Run all cells. It will:
 
-1. pack ~27,800 train + 6,000 dev + 6,000 test utterances into flat `int16` files (~4 GB),
+1. pack ~27,800 train + ~2,250 dev + ~2,073 test distinct utterances into flat `int16`
+   files (~3.5 GB total),
 2. write `data/recipes_dev.csv` and `data/recipes_test.csv`,
 3. run the test suite,
 4. print the speaker-disjointness audit and the `mix == Σsources + noise` check,
@@ -119,7 +120,7 @@ Nothing else in the repo cares which you pick; `autodetect_store()` just looks f
 | | **Route 1 — Save Version** | **Route 2 — a real Dataset** |
 |---|---|---|
 | Setup | none | an API token, once |
-| Cost of publishing | **re-runs the whole notebook** (~45 min) | uploads the files (~10 min) |
+| Cost of publishing | **re-runs the whole notebook** (~10 min) | uploads the files (~10 min) |
 | Mounts at | `/kaggle/input/<notebook-slug>/store` | `/kaggle/input/csnet-store` |
 | Attach with | + Add Input → Notebook Output | + Add Input → Datasets |
 | Versioning | one per notebook run | explicit, with a message |
@@ -127,7 +128,8 @@ Nothing else in the repo cares which you pick; `autodetect_store()` just looks f
 **Route 1 — Save Version (safe default).**
 **Save Version → Save & Run All (Commit).** Wait for it to finish (the header turns green).
 `/kaggle/working` becomes this notebook's dataset output. Be aware the commit **re-executes
-every cell**, so the 45-minute packing runs a second time. That is normal.
+every cell**, so the packing runs a second time. That is normal, and at ~10 minutes it is
+cheap enough that Route 1 stays the sensible default.
 
 **Route 2 — publish as a real Kaggle Dataset.** Worth the one-time token if you will attach
 this store to several notebooks over several weeks: it is created once and never recomputed,

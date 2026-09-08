@@ -8,7 +8,7 @@ the output as a dataset to every later notebook.
         --libri2mix_dir /kaggle/input/libri2mix-8khz-min/Libri2Mix/wav8k/min \
         --out /kaggle/working/store
 
-Roughly 25-45 minutes for the full corpus; ~4 GB out, versus ~32 GB if you rendered
+Roughly 8-12 minutes for the full corpus; ~3.5 GB out, versus ~32 GB if you rendered
 Libri3/4/5Mix to disk instead. Restartable: an already-packed split is skipped unless
 ``--force`` is given.
 
