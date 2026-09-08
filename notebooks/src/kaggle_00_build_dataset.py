@@ -143,18 +143,64 @@ for name, size in sizes.items():
 print(f"  {'TOTAL':<10} {sum(sizes.values()) / 1e9:5.2f} GB   (limit is 20 GB)")
 
 # %% [markdown]
-# ## Listen to a few mixtures
+# ## Listen to one mixture per speaker count
 #
-# Worth thirty seconds of your time. If a "3-speaker" mixture sounds like one person, the
-# problem is here, not in the model.
+# Worth a minute of your time - this is the cheapest bug-catcher in the whole project. If a
+# clip labelled 3 speakers sounds like one person, the problem is in the data, and finding
+# that out now costs nothing while finding it out after training costs GPU hours.
+#
+# **Two things that are correct but sound wrong at first:**
+#
+# * **An N=1 clip can sound like a crowd.** Babble noise is 4-8 *held-out* speakers summed at
+#   low level. One target speaker in front of babble is exactly the hardest case for a
+#   counter, and it is supposed to be in the data.
+# * **Higher N sounds like mush, not like N distinct voices.** These are `min`-mode mixtures,
+#   so every speaker is talking for the entire 3 seconds with no turn-taking. At N=5 humans
+#   cannot count them reliably either. That is the task.
+#
+# Each clip below is labelled with what it *should* contain, taken from the frozen recipe.
 
 # %%
 import glob
 from IPython.display import Audio, display
 
-for path in sorted(glob.glob("/kaggle/working/samples/test/**/*_mix.wav", recursive=True))[:4]:
-    print(os.path.relpath(path, "/kaggle/working/samples"))
+from csnet.mixing import read_recipes
+
+# Label every clip from its recipe, so you know what you are listening for.
+meta = {r["mix_id"]: r for r in read_recipes(os.path.join(DATA, "recipes_test.csv"))}
+
+for n in (1, 2, 3, 4, 5):
+    hits = sorted(glob.glob(f"/kaggle/working/samples/test/n{n}/*_mix.wav"))
+    if not hits:
+        print(f"N = {n}: nothing rendered (raise --render_limit)")
+        continue
+    path = hits[0]
+    mix_id = os.path.basename(path)[: -len("_mix.wav")]
+    recipe = meta.get(mix_id, {})
+    kind = recipe.get("noise_kind", "?")
+    condition = "clean, no noise" if kind == "none" else \
+        f"{kind} noise at {recipe.get('snr_db', 0):.0f} dB SNR"
+    print(f"\nN = {n} speaker{'s' if n != 1 else ''}   |   {condition}   |   {mix_id}")
     display(Audio(path))
+
+# %% [markdown]
+# ### Now hear what the model is asked to recover
+#
+# The same 3-speaker mixture, then its three isolated target sources. These are the
+# references SI-SDR is measured against - if you can follow each voice here, the task is
+# well posed.
+
+# %%
+three = sorted(glob.glob("/kaggle/working/samples/test/n3/*_mix.wav"))
+if three:
+    stem = three[0][: -len("_mix.wav")]
+    print("MIXTURE (what goes in):")
+    display(Audio(three[0]))
+    for k in (1, 2, 3):
+        source = f"{stem}_s{k}.wav"
+        if os.path.exists(source):
+            print(f"target source {k} (what should come out of slot {k}):")
+            display(Audio(source))
 
 # %% [markdown]
 # ## Now publish it - pick ONE of two routes
