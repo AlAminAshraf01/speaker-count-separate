@@ -146,8 +146,16 @@ def collate_mix(items: Sequence[dict]) -> dict:
 
 def build_loader(dataset: Dataset, *, batch_size: int, shuffle: bool, num_workers: int,
                  seed: int = 72, drop_last: bool = False,
-                 pin_memory: bool | None = None) -> torch.utils.data.DataLoader:
-    """DataLoader with the settings that keep a Kaggle T4 fed (2-3 workers is plenty)."""
+                 pin_memory: bool | None = None, persistent: bool = True,
+                 prefetch_factor: int = 2) -> torch.utils.data.DataLoader:
+    """DataLoader with the settings that keep a Kaggle T4 fed (2-3 workers is plenty).
+
+    ``persistent`` and ``prefetch_factor`` are exposed because they cost host RAM, and a
+    Kaggle GPU session has far less of it than the 30 GB a CPU session gets. Persistent
+    workers are worth their memory for the training loader, which is re-entered every
+    epoch; for a validation loader entered once per epoch they are just two processes
+    holding a memory-mapped corpus open between uses.
+    """
     from .utils import set_worker_seed
 
     if pin_memory is None:
@@ -161,7 +169,7 @@ def build_loader(dataset: Dataset, *, batch_size: int, shuffle: bool, num_worker
         "drop_last": bool(drop_last),
     }
     if num_workers > 0:
-        kwargs["persistent_workers"] = True
-        kwargs["prefetch_factor"] = 4
+        kwargs["persistent_workers"] = bool(persistent)
+        kwargs["prefetch_factor"] = int(prefetch_factor)
         kwargs["worker_init_fn"] = set_worker_seed
     return torch.utils.data.DataLoader(dataset, **kwargs)

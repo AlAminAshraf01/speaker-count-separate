@@ -58,6 +58,8 @@ def main() -> int:
     ap.add_argument("--resume", default="auto", help="auto | none | /path/to/last.pt")
     ap.add_argument("--time_budget_h", type=float, default=None)
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--val_workers", type=int, default=0,
+                    help="dataloader workers for validation (0 = in-process, least RAM)")
     ap.add_argument("--best_metric", default="p_si_snr",
                     choices=["p_si_snr", "sisdri_count_correct", "count_acc", "neg_loss"])
     ap.add_argument("--dry_run", action="store_true", help="5 steps + 1 eval batch, then exit")
@@ -72,6 +74,7 @@ def main() -> int:
     from csnet.engine import build_optimizer, evaluate, measure_throughput, train_one_epoch
     from csnet.losses import RectangularPITLoss
     from csnet.model import build_model
+    from csnet.memory import log_memory, release
     from csnet.utils import human_time, json_dump_atomic, pick_device, seed_everything
 
     cfg = load_cfg(resolve(args.config), args.set)
@@ -128,15 +131,25 @@ def main() -> int:
 
     train_loader = build_loader(train_set, batch_size=cfg.train.batch_size, shuffle=False,
                                 num_workers=cfg.train.num_workers, drop_last=True)
+    # The validation loader is entered once per epoch, so persistent workers would just be
+    # processes holding a memory-mapped corpus open between uses -- host RAM a Kaggle GPU
+    # session does not have to spare. Single-process costs a few seconds per epoch.
     dev_loader = build_loader(dev_set, batch_size=cfg.train.batch_size, shuffle=False,
-                              num_workers=min(2, cfg.train.num_workers))
+                              num_workers=int(args.val_workers), persistent=False)
     print(f"\ntrain: {train_store.split} dynamic mixing, {cfg.train.steps_per_epoch} steps/epoch"
           f" x batch {cfg.train.batch_size} | {train_bank.describe()}")
     print(f"dev  : {len(dev_set)} frozen mixtures {dev_set.counts_per_n()} from {recipes_dev}")
+    if cfg.train.val_batches is not None:
+        # Frozen recipes are written grouped by speaker count and the dev loader does
+        # not shuffle, so "first K batches" means "only the smallest N". Truncating
+        # would quietly validate on N=1 and N=2 alone and report it as the dev set.
+        print(f"  WARNING: val_batches={cfg.train.val_batches} truncates a set"
+              f" ordered by N; validation would cover only the lowest counts.")
 
     # ---------------------------------------------------------------- model
     model = build_model(cfg.model)
     print(f"\n{model.describe()}")
+    log_memory("after model build")
     if cfg.train.freeze_separator:
         for name, param in model.named_parameters():
             param.requires_grad = name.startswith("count_head")
@@ -241,9 +254,14 @@ def main() -> int:
             do_val = ((epoch + 1) % max(1, cfg.train.val_every) == 0) or stopped_early
             val_logs: dict = {}
             if do_val:
+                # Validation was where a 3-epoch run died with SIGKILL and no traceback,
+                # so bracket it: if it happens again the log says which side it was on.
+                log_memory(f"epoch {epoch + 1} before val")
                 val_logs = evaluate(model, dev_loader, loss_fn, device, amp=use_amp,
                                     max_batches=cfg.train.val_batches,
                                     max_n_src=cfg.model.max_n_src, n_list=cfg.data.n_list)
+                release()
+                log_memory(f"epoch {epoch + 1} after val ")
 
             score = {
                 "p_si_snr": val_logs.get("p_si_snr", float("-inf")),

@@ -14,6 +14,7 @@ import numpy as np
 import torch
 
 from .constants import MAX_N_SRC, N_LIST, class_to_n
+from .memory import format_snapshot
 from .metrics import matched_si_sdri, p_si_snr, si_sdr, summarise_per_n
 from .utils import get_logger
 
@@ -134,9 +135,10 @@ def train_one_epoch(model: torch.nn.Module, loader: Any, loss_fn: torch.nn.Modul
             on_step(step, logs)
         if log_every and n_batches % log_every == 0:
             mean = {k: v / n_batches for k, v in totals.items()}
-            LOG.info("step %d | loss %.3f | sisdr %.2f dB | count %.3f | acc %.3f | lr %.2e",
+            LOG.info("step %d | loss %.3f | sisdr %.2f dB | count %.3f | acc %.3f | "
+                     "lr %.2e | %s",
                      step, mean["loss"], mean["sisdr"], mean["count"], mean["acc"],
-                     optimizer.param_groups[0]["lr"])
+                     optimizer.param_groups[0]["lr"], format_snapshot())
         if budget is not None and n_batches % max(1, budget_check_every) == 0 and budget.expired():
             LOG.warning("time budget reached after %d steps -- stopping cleanly", n_batches)
             stopped_early = True

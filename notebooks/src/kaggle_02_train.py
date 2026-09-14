@@ -61,15 +61,30 @@ print("\ncheckpoints visible from a previous session:", previous or "none (first
 # | `configs/small.yaml` | 1.9 M | ~5x faster | ablations, and if quota is tight |
 # | `configs/tiny.yaml` | 0.3 M | CPU-able | plumbing only, learns nothing |
 #
-# **Set `EPOCHS` deliberately.** The project record's budget arithmetic says a free weekly
-# quota buys roughly 60-130 epochs of the pooled N=1..5 set. Plan **60-100, not 200**, and
-# state it in the report as a budget decision. Our numbers will sit a decibel or two below
-# published baselines; that is expected and defensible. Half a joint model plus half an
-# interpretability study is not.
+# **Set `EPOCHS` from the measurement, not from ambition.** A timed run on GPU T4 x2 at
+# batch 12 gave **1.72 s/step**, so 1000 steps plus validation is about **30 minutes an
+# epoch** and an 11-hour session buys roughly **21 epochs**. The free weekly quota is 30
+# GPU-hours, so:
+#
+# | EPOCHS | sessions | GPU-h | leaves for evaluation |
+# |---|---|---|---|
+# | 40 | 2 | ~22 | 8 h |
+# | 60 | 3 | ~31 | nothing -- over the weekly quota |
+#
+# 40 is the default here for that reason. State it in the report as a budget decision. Our
+# numbers will sit a decibel or two below published baselines; that is expected and
+# defensible. Half a joint model plus half an interpretability study is not.
+#
+# ## If a session dies with `exit -9`
+#
+# That is the Linux OOM killer, not a bug in the model, and it means **host RAM** rather
+# than GPU memory. A Kaggle GPU session has far less RAM than a CPU one. The trainer now
+# prints a `ram ...` line at every log step and on both sides of validation, so the last
+# line before a kill says how close it was and which phase it was in. Send that line.
 
 # %%
 CONFIG = "configs/paper.yaml"
-EPOCHS = 60
+EPOCHS = 40                # measured: ~30 min/epoch, so ~21 epochs per 11 h session
 BATCH_SIZE = 12          # drop to 8 if you hit CUDA OOM
 TIME_BUDGET_H = 11.0     # stop cleanly before Kaggle's 12 h cap
 STEPS_PER_EPOCH = 1000
