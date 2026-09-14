@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 from .constants import MAX_N_SRC, N_LIST, class_to_n
-from .memory import format_snapshot
+from .memory import MemoryGuard, format_snapshot
 from .metrics import matched_si_sdri, p_si_snr, si_sdr, summarise_per_n
 from .utils import get_logger
 
@@ -77,6 +77,7 @@ def train_one_epoch(model: torch.nn.Module, loader: Any, loss_fn: torch.nn.Modul
                     scheduler: Any = None, grad_clip: float = 5.0, log_every: int = 50,
                     budget: Any = None, global_step: int = 0, amp: bool = True,
                     accum: int = 1, on_step: Callable[[int, dict], None] | None = None,
+                    mem_guard: "MemoryGuard | None" = None,
                     budget_check_every: int = 20, max_steps: int | None = None,
                     progress: bool = True) -> dict:
     """One pass over ``loader``. Returns aggregated logs plus ``stopped_early``."""
@@ -139,6 +140,8 @@ def train_one_epoch(model: torch.nn.Module, loader: Any, loss_fn: torch.nn.Modul
                      "lr %.2e | %s",
                      step, mean["loss"], mean["sisdr"], mean["count"], mean["acc"],
                      optimizer.param_groups[0]["lr"], format_snapshot())
+        if mem_guard is not None and n_batches % mem_guard.check_every == 0:
+            mem_guard.check(f"training step {step}")
         if budget is not None and n_batches % max(1, budget_check_every) == 0 and budget.expired():
             LOG.warning("time budget reached after %d steps -- stopping cleanly", n_batches)
             stopped_early = True
@@ -204,6 +207,7 @@ def _softmax(x: np.ndarray) -> np.ndarray:
 def evaluate(model: torch.nn.Module, loader: Any, loss_fn: torch.nn.Module,
              device: torch.device, *, amp: bool = True, max_batches: int | None = None,
              collect: bool = False, max_n_src: int = MAX_N_SRC,
+             mem_guard: "MemoryGuard | None" = None,
              n_list: Sequence[int] = N_LIST, full_metrics: bool = True,
              progress: bool = False) -> dict:
     """Validation pass. Returns loss terms, count accuracy, SI-SDRi and P-SI-SNR."""
@@ -236,6 +240,8 @@ def evaluate(model: torch.nn.Module, loader: Any, loss_fn: torch.nn.Module,
         n_batches += 1
         if full_metrics:
             records.extend(batch_records(out, batch, max_n_src=max_n_src))
+        if mem_guard is not None and n_batches % mem_guard.check_every == 0:
+            mem_guard.check(f"validation batch {n_batches}")
 
     result = {k: v / max(1, n_batches) for k, v in totals.items()}
     result["batches"] = n_batches

@@ -14,8 +14,10 @@ import tempfile
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                                 "src"))
 
-from csnet.memory import (available_gb, cgroup_usage_gb, format_snapshot, log_memory,
-                          release, rss_gb, snapshot)
+import csnet.memory as M
+from csnet.memory import (MemoryBudgetExceeded, MemoryGuard, available_gb,
+                          cgroup_usage_gb, format_snapshot, log_memory, release,
+                          rss_gb, snapshot)
 
 _GB = 1024.0 ** 3
 TMP = tempfile.mkdtemp()
@@ -114,6 +116,65 @@ def test_log_memory_survives_a_broken_printer() -> None:
 def test_release_is_safe_to_call() -> None:
     release()
     release()
+
+
+def _guard_with(used_bytes: int, limit_bytes: int, frac: float = 0.85):
+    """A guard reading a synthetic cgroup, so the thresholds can be tested off Linux."""
+    used = _write("g_used", str(used_bytes))
+    limit = _write("g_limit", str(limit_bytes))
+    real = M.cgroup_usage_gb
+    M.cgroup_usage_gb = lambda pairs=None: real(((used, limit),))
+    return MemoryGuard(frac=frac), real
+
+
+def test_guard_fires_above_the_threshold_and_not_below() -> None:
+    real = M.cgroup_usage_gb
+    try:
+        guard, _ = _guard_with(27_917_287_424, 32_212_254_720)     # 26 of 30 GiB = 87%
+        assert guard.enabled and abs(guard.limit_gb - 30.0) < 1e-6
+        assert guard.exceeded(), "87% must trip an 85% guard"
+        raised = False
+        try:
+            guard.check("validation batch 40")
+        except MemoryBudgetExceeded as exc:
+            raised = True
+            assert "26.0" in str(exc) and "30.0" in str(exc), str(exc)
+            assert "validation batch 40" in str(exc), "the message must name the phase"
+        assert raised, "check() must raise once over the threshold"
+    finally:
+        M.cgroup_usage_gb = real
+
+    try:
+        guard, _ = _guard_with(10_737_418_240, 32_212_254_720)     # 10 of 30 GiB = 33%
+        assert not guard.exceeded(), "33% must not trip an 85% guard"
+        guard.check("training step 100")                            # must not raise
+    finally:
+        M.cgroup_usage_gb = real
+
+
+def test_guard_is_inert_without_a_readable_limit() -> None:
+    """A guard that fires on an unreadable cgroup would be worse than no guard at all."""
+    real = M.cgroup_usage_gb
+    M.cgroup_usage_gb = lambda pairs=None: (float("nan"), float("nan"))
+    try:
+        guard = MemoryGuard(frac=0.01)       # absurdly low: still must not fire
+        assert not guard.enabled
+        assert not guard.exceeded()
+        guard.check("anywhere")
+        assert "inert" in guard.describe()
+    finally:
+        M.cgroup_usage_gb = real
+
+
+def test_guard_tracks_its_peak() -> None:
+    real = M.cgroup_usage_gb
+    try:
+        guard, _ = _guard_with(5_368_709_120, 32_212_254_720)       # 5 of 30 GiB
+        guard.usage()
+        assert abs(guard.peak_gb - 5.0) < 1e-6, guard.peak_gb
+        assert "peak seen 5.0" in guard.describe(), guard.describe()
+    finally:
+        M.cgroup_usage_gb = real
 
 
 if __name__ == "__main__":

@@ -58,6 +58,9 @@ def main() -> int:
     ap.add_argument("--resume", default="auto", help="auto | none | /path/to/last.pt")
     ap.add_argument("--time_budget_h", type=float, default=None)
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--mem_guard_frac", type=float, default=0.85,
+                    help="stop cleanly at this share of the container memory limit "
+                         "(0 disables). A SIGKILL saves nothing; this saves a checkpoint.")
     ap.add_argument("--val_workers", type=int, default=0,
                     help="dataloader workers for validation (0 = in-process, least RAM)")
     ap.add_argument("--best_metric", default="p_si_snr",
@@ -74,7 +77,8 @@ def main() -> int:
     from csnet.engine import build_optimizer, evaluate, measure_throughput, train_one_epoch
     from csnet.losses import RectangularPITLoss
     from csnet.model import build_model
-    from csnet.memory import log_memory, release
+    from csnet.memory import (MemoryBudgetExceeded, MemoryGuard, log_memory,
+                              release)
     from csnet.utils import human_time, json_dump_atomic, pick_device, seed_everything
 
     cfg = load_cfg(resolve(args.config), args.set)
@@ -225,6 +229,10 @@ def main() -> int:
                         best_metric=best_metric, history=history,
                         cfg_dict=cfg_to_dict(cfg), wall_h=budget.total_h())
 
+    mem_guard = MemoryGuard(frac=float(args.mem_guard_frac)) if args.mem_guard_frac > 0 else None
+    if mem_guard is not None:
+        print(mem_guard.describe())
+
     # ---------------------------------------------------------------- loop
     banner("training")
     stopped_early = False
@@ -247,7 +255,7 @@ def main() -> int:
                 scheduler=scheduler, grad_clip=cfg.train.grad_clip,
                 log_every=cfg.train.log_every, budget=budget, global_step=global_step,
                 amp=use_amp, accum=cfg.train.accum, on_step=on_step,
-                max_steps=cfg.train.steps_per_epoch)
+                max_steps=cfg.train.steps_per_epoch, mem_guard=mem_guard)
             global_step = int(train_logs["global_step"])
             stopped_early = bool(train_logs["stopped_early"])
 
@@ -259,7 +267,8 @@ def main() -> int:
                 log_memory(f"epoch {epoch + 1} before val")
                 val_logs = evaluate(model, dev_loader, loss_fn, device, amp=use_amp,
                                     max_batches=cfg.train.val_batches,
-                                    max_n_src=cfg.model.max_n_src, n_list=cfg.data.n_list)
+                                    max_n_src=cfg.model.max_n_src,
+                                    n_list=cfg.data.n_list, mem_guard=mem_guard)
                 release()
                 log_memory(f"epoch {epoch + 1} after val ")
 
@@ -327,6 +336,22 @@ def main() -> int:
     except KeyboardInterrupt:
         print("\ninterrupted -- saving before exit")
         checkpoint(os.path.join(ckpt_dir, "last.pt"), epoch, global_step)
+        stopped_early = True
+    except MemoryBudgetExceeded as exc:
+        # Losing the session is unavoidable at this point; losing the checkpoint and the
+        # diagnosis is not. Exit 0 so the notebook still commits and the output survives.
+        banner("STOPPED ON MEMORY")
+        print(exc)
+        log_memory("at the stop")
+        print(mem_guard.describe())
+        print("")
+        print("This is the container memory limit, not GPU memory. To try, in order:")
+        print("  1. --set train.num_workers=1   (each worker holds the corpus open)")
+        print("  2. --set train.num_workers=0   (loads in-process; slower but flat)")
+        print("Send the ram lines from this log: the growth rate between them says")
+        print("whether it climbs per step or jumps at validation -- different bugs.")
+        checkpoint(os.path.join(ckpt_dir, "last.pt"), epoch, global_step)
+        print(f"checkpoint saved -> {os.path.join(ckpt_dir, 'last.pt')}")
         stopped_early = True
     finally:
         log_handle.close()

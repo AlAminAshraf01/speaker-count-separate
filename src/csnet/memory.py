@@ -131,6 +131,59 @@ def release() -> None:
         pass
 
 
+class MemoryBudgetExceeded(RuntimeError):
+    """Raised when container memory crosses the guard threshold.
+
+    The point is to lose the session on our terms instead of the kernel's. SIGKILL takes
+    the process with no traceback, no final checkpoint and no clue; this leaves all three.
+    """
+
+
+class MemoryGuard:
+    """Stop before the OOM killer does.
+
+    ``frac`` is the share of the cgroup limit at which to give up. The default leaves
+    enough headroom for one more batch, one more checkpoint write and the interpreter's
+    own churn -- stopping at 99 % would just lose the race.
+
+    Where no cgroup limit is readable the guard is inert rather than guessing at one; a
+    guard that fires on a bad reading would be worse than no guard.
+    """
+
+    def __init__(self, frac: float = 0.85, check_every: int = 50) -> None:
+        self.frac = float(frac)
+        self.check_every = max(1, int(check_every))
+        _, limit = cgroup_usage_gb()
+        self.limit_gb = limit
+        self.enabled = limit == limit and limit > 0
+        self.peak_gb = 0.0
+
+    def usage(self) -> float:
+        used, _ = cgroup_usage_gb()
+        if used == used:
+            self.peak_gb = max(self.peak_gb, used)
+        return used
+
+    def exceeded(self) -> bool:
+        if not self.enabled:
+            return False
+        used = self.usage()
+        return used == used and used >= self.frac * self.limit_gb
+
+    def check(self, where: str = "") -> None:
+        """Raise :class:`MemoryBudgetExceeded` if over threshold."""
+        if self.exceeded():
+            raise MemoryBudgetExceeded(
+                f"container memory {self.usage():.1f} GiB of {self.limit_gb:.1f} GiB "
+                f"({self.frac * 100:.0f}% threshold) {('at ' + where) if where else ''}")
+
+    def describe(self) -> str:
+        if not self.enabled:
+            return "MemoryGuard(inert -- no cgroup limit readable)"
+        return (f"MemoryGuard(stop at {self.frac * 100:.0f}% of "
+                f"{self.limit_gb:.1f} GiB, peak seen {self.peak_gb:.1f} GiB)")
+
+
 if __name__ == "__main__":  # pragma: no cover - manual check
     print(format_snapshot("self-test"))
     print(snapshot())
