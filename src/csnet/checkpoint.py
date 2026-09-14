@@ -20,6 +20,7 @@ truncated checkpoint behind.
 from __future__ import annotations
 
 import glob
+import json
 import os
 import random
 import time
@@ -164,13 +165,44 @@ def load_checkpoint(path: str, *, model: Any = None, optimizer: Any = None,
     return state
 
 
+def checkpoint_step(path: str) -> int:
+    """Global step recorded in a checkpoint, or -1 if it cannot be read.
+
+    Prefers the ``history.json`` the trainer writes beside every checkpoint, because
+    reading one integer out of a 64 MB torch archive to rank candidates is absurd. Falls
+    back to opening the archive when that file is absent.
+    """
+    history = os.path.join(os.path.dirname(path), "history.json")
+    try:
+        with open(history, "r", encoding="utf-8") as fh:
+            rows = json.load(fh)
+        if rows:
+            return int(rows[-1].get("global_step", -1))
+    except Exception:
+        pass
+    try:
+        import torch
+
+        state = torch.load(path, map_location="cpu", weights_only=False)
+        return int(state.get("global_step", -1))
+    except Exception:
+        return -1
+
+
 def find_resume(explicit: str | None = None, work_dir: str = "/kaggle/working/ckpt",
                 search_inputs: bool = True,
                 input_root: str = "/kaggle/input") -> str | None:
     """Locate a checkpoint to resume from.
 
-    Order: an explicit path, then ``<work_dir>/last.pt``, then the newest ``last.pt``
-    anywhere under the attached input datasets (that is the previous session's output).
+    Order: an explicit path, then ``<work_dir>/last.pt``, then the **furthest-along**
+    ``last.pt`` under the attached input datasets.
+
+    Furthest-along, not newest. A session's output typically contains more than one
+    checkpoint directory -- ``_dryrun/last.pt`` from the 30-second plumbing check sits
+    right next to ``ckpt/last.pt`` from the real run -- and ranking by file mtime is a coin
+    flip that, lost, silently restarts a multi-hour run from step 5 while reporting that it
+    resumed. Rank by recorded global step and the question does not arise. mtime remains
+    the tie-break for checkpoints whose step cannot be read.
     """
     if explicit and str(explicit).lower() not in {"none", "auto", ""}:
         return explicit if os.path.exists(explicit) else None
@@ -183,7 +215,7 @@ def find_resume(explicit: str | None = None, work_dir: str = "/kaggle/working/ck
         candidates = glob.glob(os.path.join(input_root, "*", "**", "last.pt"), recursive=True)
         candidates = [c for c in candidates if os.path.isfile(c)]
         if candidates:
-            return max(candidates, key=os.path.getmtime)
+            return max(candidates, key=lambda c: (checkpoint_step(c), os.path.getmtime(c)))
     return None
 
 

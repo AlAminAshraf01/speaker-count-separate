@@ -147,6 +147,53 @@ def test_keep_last_k() -> None:
     assert len(removed) == 2 and left == ["epoch_002.pt", "epoch_003.pt"], left
 
 
+def test_find_resume_prefers_the_furthest_along_not_the_newest() -> None:
+    """A session output holds _dryrun/last.pt beside ckpt/last.pt.
+
+    The dry run writes 5 steps; the real run writes thousands. If the dry-run file happens
+    to carry the newer mtime, ranking by mtime silently restarts training from step 5 while
+    printing that it resumed -- the most expensive kind of wrong.
+    """
+    import json as _json
+
+    from csnet.checkpoint import find_resume, save_checkpoint
+
+    model, optimizer = _model_and_optimizer()
+    root = tempfile.mkdtemp()
+    mount = os.path.join(root, "notebooks", "owner", "run")
+
+    real = os.path.join(mount, "ckpt")
+    dry = os.path.join(mount, "_dryrun")
+    for directory, step in ((real, 2800), (dry, 5)):
+        os.makedirs(directory, exist_ok=True)
+        save_checkpoint(os.path.join(directory, "last.pt"), model=model, optimizer=optimizer,
+                        global_step=step)
+        with open(os.path.join(directory, "history.json"), "w", encoding="utf-8") as fh:
+            _json.dump([{"epoch": 1, "global_step": step}], fh)
+
+    # Make the dry run the NEWEST file, which is what breaks an mtime-ranked search.
+    time.sleep(0.02)
+    os.utime(os.path.join(dry, "last.pt"), None)
+    assert (os.path.getmtime(os.path.join(dry, "last.pt"))
+            > os.path.getmtime(os.path.join(real, "last.pt")))
+
+    found = find_resume(None, work_dir=os.path.join(root, "nonexistent"), input_root=root)
+    assert found is not None, "nothing found under the fake mount"
+    assert os.path.normpath(found) == os.path.normpath(os.path.join(real, "last.pt")), found
+
+
+def test_checkpoint_step_falls_back_to_the_archive() -> None:
+    """With no history.json beside it, the step still has to come out of the checkpoint."""
+    from csnet.checkpoint import checkpoint_step, save_checkpoint
+
+    model, _ = _model_and_optimizer()
+    directory = tempfile.mkdtemp()
+    path = os.path.join(directory, "last.pt")
+    save_checkpoint(path, model=model, global_step=1234)
+    assert checkpoint_step(path) == 1234
+    assert checkpoint_step(os.path.join(directory, "absent.pt")) == -1
+
+
 CHECKS = {name: fn for name, fn in sorted(globals().items()) if name.startswith("test_")}
 
 if __name__ == "__main__":
