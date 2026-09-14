@@ -151,6 +151,25 @@ def main() -> int:
     mit_X, _ = features_to_matrix(mit_rows, keys)
     chance = 100.0 / len(set(raw_y.tolist()))
 
+
+def probe_flag(name: str, accuracy: float, chance: float) -> str:
+    """Label a probe result. Only artefact probes can be a *leak*.
+
+    Anything above chance gets flagged by a naive threshold, but "sparsity + spectrum
+    predicts N" is the task working, not a bug: five overlapping talkers really do produce
+    a flatter, less peaky signal than one. Calling that a leak invites the report to
+    describe legitimate acoustic evidence as contamination, so say which it is.
+    """
+    if accuracy <= chance * 1.5:
+        return ""
+    upper = name.upper()
+    if "ARTEFACT" in upper:
+        return "   <-- LEAK"
+    if "ACOUSTIC" in upper:
+        return "   <-- signal (legitimate)"
+    return "   <-- above chance"        # "everything" mixes both families
+
+
     # ------------------------------------------------------------ probes
     def run(label, X, y):
         print(f"\n{label}   (depth-{args.max_depth} tree, {args.folds}-fold CV, "
@@ -158,7 +177,7 @@ def main() -> int:
         results = probe_feature_groups(X, y, keys, max_depth=args.max_depth,
                                        n_folds=args.folds)
         for name, res in results.items():
-            flag = "   <-- LEAK" if res["accuracy"] > res["chance"] * 1.5 else ""
+            flag = probe_flag(name, res["accuracy"], res["chance"])
             print(f"    {name:<40s} {res['accuracy'] * 100:5.1f} %{flag}")
         return {k: {"accuracy": v["accuracy"], "chance": v["chance"],
                     "feature_importance": v["feature_importance"]}

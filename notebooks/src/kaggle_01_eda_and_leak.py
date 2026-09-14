@@ -260,7 +260,10 @@ print(f"{'probe':<48s} {'accuracy':>9s}")
 print("-" * 60)
 for stage, label in (("raw", "RAW"), ("mitigated", "MITIGATED")):
     for name, res in leak[stage].items():
-        flag = "  <-- LEAK" if res["accuracy"] > res["chance"] * 1.5 else ""
+        flag = ("" if res["accuracy"] <= res["chance"] * 1.5 else
+                "  <-- LEAK" if "ARTEFACT" in name.upper() else
+                "  <-- signal (legitimate)" if "ACOUSTIC" in name.upper() else
+                "  <-- above chance")
         print(f"{label + ' | ' + name:<48s} {res['accuracy'] * 100:8.1f} %{flag}")
 print("-" * 60)
 print(f"{'chance':<48s} {chance:8.1f} %")
