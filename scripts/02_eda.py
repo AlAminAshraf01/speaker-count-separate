@@ -144,7 +144,16 @@ def main() -> int:
     # ------------------------------------------------------------ figures
     def save(fig, name: str) -> None:
         path = os.path.join(out_dir, name)
-        fig.savefig(path)
+        # Every panel carries a title, an x-label and a y-label, and the multi-panel
+        # figures add a suptitle on top. Without an explicit layout pass matplotlib
+        # lets the top row's x-label land on the bottom row's title. constrained_layout
+        # accounts for the suptitle as well; tight_layout with a reserved top strip is
+        # the fallback for the older matplotlib Kaggle sometimes ships.
+        try:
+            fig.set_layout_engine("constrained")
+        except AttributeError:
+            fig.tight_layout(rect=(0.0, 0.0, 1.0, 0.94))
+        fig.savefig(path, dpi=150, bbox_inches="tight")
         plt.close(fig)
         print(f"  wrote {path}")
 
@@ -208,7 +217,8 @@ def main() -> int:
                         label=f"N={n}", density=True)
     axes[0, 0].set_title("BEFORE: mixture level leaks N"); axes[0, 0].set_xlabel("level (dB)")
     axes[0, 1].set_title("BEFORE: `min`-mode duration leaks N"); axes[0, 1].set_xlabel("seconds")
-    axes[1, 0].set_title("AFTER: RMS normalised"); axes[1, 0].set_xlabel("level (dB)")
+    axes[1, 0].set_title("AFTER: RMS normalised -- 0 dB by construction")
+    axes[1, 0].set_xlabel("level (dB), spread is float32 rounding only")
     axes[1, 1].set_title(f"AFTER: fixed {args.seg_seconds:g} s crop")
     axes[1, 1].set_xlabel("seconds")
     for ax in axes.ravel():
