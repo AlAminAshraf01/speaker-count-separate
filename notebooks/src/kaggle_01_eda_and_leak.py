@@ -3,8 +3,12 @@
 #
 # **Accelerator: None (CPU).** No GPU quota. **Runtime: 10-20 minutes.**
 #
-# This one notebook produces **two mandated report sections**:
+# This one notebook produces **two mandated report sections**, after a cheap integrity
+# gate:
 #
+# * **Step 0 - frozen-set check**: do the recipes in the attached store match the ones
+#   committed to git? Seconds when they agree; two minutes of re-derivation when they do
+#   not, which tells you which copy is the reproducible one.
 # * **Phase 1 - EDA**: correlation matrices, variance, outliers.
 # * **Phase 4 - data-leakage audit**, whose output doubles as the **Phase 5 naive-predictor
 #   benchmark**.
@@ -51,6 +55,123 @@ print("store   :", STORE)
 print("recipes :", DATA)
 assert STORE, "attach the 00_build_dataset notebook output via '+ Add Input'"
 assert os.path.exists(os.path.join(DATA, "recipes_test.csv")), "recipes_test.csv not found"
+
+# %% [markdown]
+# ## Step 0 - is the frozen set actually frozen?
+#
+# The evaluation protocol lives in two places: the CSVs inside the `00_build_dataset`
+# output you just attached, and the copies committed to git. They are supposed to be the
+# same bytes - that is the whole claim behind "a few hundred kB of CSV re-renders the test
+# set exactly".
+#
+# It is a claim, so check it rather than assume it. A silent divergence here means every
+# SI-SDR number you report later was measured on a different test set than the one in your
+# repo, and nothing downstream would tell you.
+
+# %%
+import csv
+import hashlib
+
+
+def _sha(path: str) -> str:
+    """First 16 hex digits of the file's SHA-256 - plenty to spot a difference."""
+    return hashlib.sha256(open(path, "rb").read()).hexdigest()[:16]
+
+
+RECIPE_NAMES = ("recipes_dev.csv", "recipes_test.csv")
+REPO_DATA = os.path.join(REPO, "data")
+RECHECK = "/kaggle/working/recheck"
+
+FROZEN_OK = True
+COMPARED = 0
+for name in RECIPE_NAMES:
+    attached, repo = os.path.join(DATA, name), os.path.join(REPO_DATA, name)
+    if not os.path.exists(repo):
+        print(f"{name:<20} no copy committed to the repo yet -- skipping")
+        continue
+    a, r = _sha(attached), _sha(repo)
+    FROZEN_OK = FROZEN_OK and a == r
+    COMPARED += 1
+    print(f"{name:<20} attached {a}   repo {r}   "
+          f"{'MATCH' if a == r else 'DIFFER'}")
+
+print()
+if not COMPARED:
+    print("Nothing to compare - no recipes committed to the repo yet.")
+    print("Download them from the attached 00 output and commit them; see data/README.md.")
+elif FROZEN_OK:
+    print("Frozen set agrees with the repo.")
+else:
+    print("MISMATCH. Run the next two cells to find out which copy is reproducible.")
+    print("The EDA below is unaffected - it describes the corpus, not one particular")
+    print("draw - but resolve this before reporting any number from notebook 04.")
+
+# %% [markdown]
+# ### Only if they differed: re-derive the recipes, see which copy comes back
+#
+# This regenerates the frozen sets from the **attached** store with the current code, into
+# a scratch directory. Nothing is overwritten. About two minutes on CPU, and it is skipped
+# entirely when the hashes already agree, so `Save & Run All` stays cheap.
+
+# %%
+if FROZEN_OK or not COMPARED:
+    print("nothing to re-derive.")
+else:
+    run(f"python scripts/01_make_frozen_sets.py --store {STORE}"
+        f" --out {RECHECK} --splits dev test --n_list 1 2 3 4 5"
+        f" --n_per_class 300 --seg_seconds 3.0 --p_clean 0.25 --snr_db 0 20"
+        f" --seed 72 --force")
+
+# %%
+VERDICTS = {
+    "recheck==attached": (
+        "The pipeline IS deterministic: the same store and the same code reproduce the",
+        "attached copy. The committed copy is stale - it predates the seeding fix.",
+        "FIX: download data/recipes_*.csv from the attached 00 output, replace the repo",
+        "copies, commit, push. Then this cell goes quiet.",
+    ),
+    "recheck==repo": (
+        "The committed copy is what the current code reproduces; the attached one is not.",
+        "That points at the 00 run rather than at the recipes.",
+        "FIX: re-run notebook 00 from a clean container and commit a new version.",
+    ),
+    "all differ": (
+        "All three differ - something in the chain is still nondeterministic.",
+        "Do not train on this. The row counts above localise it: 0 of 1500 means the rng",
+        "seed diverged at row one, a high number means the packed store moved.",
+    ),
+}
+
+if not FROZEN_OK and COMPARED:
+    verdict = None
+    for name in RECIPE_NAMES:
+        paths = {"attached": os.path.join(DATA, name),
+                 "repo": os.path.join(REPO_DATA, name),
+                 "recheck": os.path.join(RECHECK, name)}
+        paths = {k: p for k, p in paths.items() if os.path.exists(p)}
+        rows = {k: list(csv.reader(open(p, newline="", encoding="utf-8")))
+                for k, p in paths.items()}
+        print(f"[{name}]")
+        for k, p in paths.items():
+            print(f"  {k:<9} {_sha(p)}")
+        for k in ("repo", "recheck"):
+            if k in rows:
+                same = sum(x == y for x, y in zip(rows["attached"], rows[k]))
+                print(f"  rows identical to attached: {k:<9} "
+                      f"{same} / {len(rows['attached'])}")
+        if name == "recipes_test.csv" and "recheck" in paths:
+            here = _sha(paths["recheck"])
+            if here == _sha(paths["attached"]):
+                verdict = "recheck==attached"
+            elif "repo" in paths and here == _sha(paths["repo"]):
+                verdict = "recheck==repo"
+            else:
+                verdict = "all differ"
+    print("=" * 78)
+    for row in VERDICTS.get(verdict, ("re-derivation did not run",)):
+        print(row)
+    print("=" * 78)
+
 
 # %% [markdown]
 # ## Phase 1 - EDA
