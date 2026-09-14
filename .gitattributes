@@ -1,0 +1,6 @@
+# The recipe CSVs are the frozen evaluation protocol. Git must not rewrite a byte of
+# them: core.autocrlf=true on Windows converts CRLF -> LF on commit, which changes the
+# file's hash without changing its content, and makes the integrity check in notebook 01
+# report a mismatch that is not one. The csv module writes CRLF on every platform, so
+# -text keeps the committed bytes identical to what Kaggle produces.
+data/recipes_*.csv -text

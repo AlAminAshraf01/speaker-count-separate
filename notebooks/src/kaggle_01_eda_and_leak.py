@@ -73,9 +73,19 @@ import csv
 import hashlib
 
 
-def _sha(path: str) -> str:
-    """First 16 hex digits of the file's SHA-256 - plenty to spot a difference."""
-    return hashlib.sha256(open(path, "rb").read()).hexdigest()[:16]
+# Git on Windows with core.autocrlf=true rewrites CRLF to LF when a text file is
+# committed. The csv module writes CRLF on every platform, so a committed recipe file
+# can hash differently from the one Kaggle generates while being the same data line for
+# line. That is a packaging artefact, not a broken protocol, and it is worth telling the
+# two apart: .gitattributes fixes the first, nothing fixes the second.
+_CRLF, _LF = bytes([13, 10]), bytes([10])
+
+
+def _sha(path: str, eol_blind: bool = False) -> str:
+    """First 16 hex digits of SHA-256; optionally ignoring line terminators."""
+    data = open(path, "rb").read()
+    return hashlib.sha256(data.replace(_CRLF, _LF) if eol_blind
+                          else data).hexdigest()[:16]
 
 
 RECIPE_NAMES = ("recipes_dev.csv", "recipes_test.csv")
@@ -84,16 +94,23 @@ RECHECK = "/kaggle/working/recheck"
 
 FROZEN_OK = True
 COMPARED = 0
+EOL_ONLY = False
 for name in RECIPE_NAMES:
     attached, repo = os.path.join(DATA, name), os.path.join(REPO_DATA, name)
     if not os.path.exists(repo):
         print(f"{name:<20} no copy committed to the repo yet -- skipping")
         continue
     a, r = _sha(attached), _sha(repo)
-    FROZEN_OK = FROZEN_OK and a == r
     COMPARED += 1
-    print(f"{name:<20} attached {a}   repo {r}   "
-          f"{'MATCH' if a == r else 'DIFFER'}")
+    if a == r:
+        status = "MATCH"
+    elif _sha(attached, True) == _sha(repo, True):
+        status = "EOL ONLY"
+        EOL_ONLY = True
+    else:
+        status = "DIFFER"
+        FROZEN_OK = False
+    print(f"{name:<20} attached {a}   repo {r}   {status}")
 
 print()
 if not COMPARED:
@@ -101,6 +118,14 @@ if not COMPARED:
     print("Download them from the attached 00 output and commit them; see data/README.md.")
 elif FROZEN_OK:
     print("Frozen set agrees with the repo.")
+    if EOL_ONLY:
+        print()
+        print("Line terminators differ, every data line does not. Git rewrote CRLF to")
+        print("LF on commit (core.autocrlf on Windows). The protocol is intact - the")
+        print("csv reader is blind to this - but the byte hashes will keep disagreeing")
+        print("until the repo carries a .gitattributes line:")
+        print("    data/recipes_*.csv -text")
+        print("then: git add --renormalize data/ && git commit && git push")
 else:
     print("MISMATCH. Run the next two cells to find out which copy is reproducible.")
     print("The EDA below is unaffected - it describes the corpus, not one particular")
