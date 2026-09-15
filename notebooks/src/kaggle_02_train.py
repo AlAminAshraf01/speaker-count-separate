@@ -145,8 +145,7 @@ BISECT = False       # True: spend ~15 min finding which component leaks, and tr
 
 if BISECT:
     run(f"python scripts/10_memory_bisect.py --store {STORE}"
-        f" --config {CONFIG} --warmup 40 --steps 120"
-        f" --set train.batch_size={BATCH_SIZE}")
+        f" --config {CONFIG} --set train.batch_size={BATCH_SIZE}")
 
 # %%
 if not BISECT:
