@@ -16,8 +16,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 
 import csnet.memory as M
 from csnet.memory import (LeakWatch, MemoryBudgetExceeded, MemoryGuard, available_gb,
-                          cgroup_usage_gb, format_snapshot, log_memory, release,
-                          rss_gb, snapshot)
+                          cgroup_breakdown, cgroup_usage_gb, format_snapshot,
+                          log_memory, release, rss_gb, snapshot, unreclaimable_gb)
 
 _GB = 1024.0 ** 3
 TMP = tempfile.mkdtemp()
@@ -97,7 +97,8 @@ def test_available_missing_key_is_nan() -> None:
 
 def test_snapshot_and_format_never_raise() -> None:
     snap = snapshot()
-    assert set(snap) == {"rss_gb", "cgroup_gb", "cgroup_limit_gb", "available_gb"}
+    assert set(snap) == {"rss_gb", "cgroup_gb", "cgroup_limit_gb", "available_gb",
+                         "unreclaimable_gb"}
     text = format_snapshot("phase")
     assert isinstance(text, str) and text.startswith("ram")
     lines: list[str] = []
@@ -277,6 +278,81 @@ def test_leakwatch_warmup_is_relative_to_the_first_observation() -> None:
 
     assert watch.origin == 5600, watch.origin
     assert "healthy" in watch.describe(), watch.describe()
+
+
+_GIB = 1024 ** 3
+
+
+def test_cgroup_breakdown_reads_v2_names() -> None:
+    path = _write("memory.stat.v2", "\n".join([
+        f"anon {2 * _GIB}", f"file {7 * _GIB}", "kernel_stack 1048576",
+        f"shmem {1 * _GIB}", "slab 123456", ""]))
+    parts = cgroup_breakdown((path,))
+    assert abs(parts["anon_gb"] - 2.0) < 1e-6, parts
+    assert abs(parts["file_gb"] - 7.0) < 1e-6, parts
+    assert abs(parts["shmem_gb"] - 1.0) < 1e-6, parts
+
+
+def test_cgroup_breakdown_reads_v1_names() -> None:
+    """v1 calls the anonymous part rss and the page cache cache."""
+    path = _write("memory.stat.v1", "\n".join([
+        f"cache {5 * _GIB}", f"rss {3 * _GIB}", f"shmem {512 * 1024 * 1024}", ""]))
+    parts = cgroup_breakdown((path,))
+    assert abs(parts["anon_gb"] - 3.0) < 1e-6, parts
+    assert abs(parts["file_gb"] - 5.0) < 1e-6, parts
+    assert abs(parts["shmem_gb"] - 0.5) < 1e-6, parts
+
+
+def test_cgroup_breakdown_missing_file_is_all_nan() -> None:
+    parts = cgroup_breakdown((os.path.join(TMP, "absent"),))
+    assert all(v != v for v in parts.values()), parts
+
+
+def test_guard_ignores_page_cache_growth() -> None:
+    """The observed healthy run: cgroup total climbing, anon flat.
+
+    Reading a memory-mapped 3 GiB corpus parks it in page cache, which the cgroup charges
+    and the kernel reclaims on demand. A guard on the total stops that run for no reason;
+    a guard on anon+shmem lets it work.
+    """
+    real_usage, real_unrec = M.cgroup_usage_gb, M.unreclaimable_gb
+    try:
+        used = _write("pc_used", str(6 * _GIB))
+        limit = _write("pc_limit", str(30 * _GIB))
+        M.cgroup_usage_gb = lambda pairs=None: real_usage(((used, limit),))
+        M.unreclaimable_gb = lambda: 2.0          # anon+shmem: flat and small
+        guard = MemoryGuard(frac=0.85)
+        assert guard.enabled and not guard.watches_total
+        assert abs(guard.usage() - 2.0) < 1e-6, guard.usage()
+        assert not guard.exceeded(), "2 GiB of anon against a 30 GiB limit must not fire"
+
+        # Now let page cache take the total to 28 GiB while anon stays at 2.
+        with open(used, "w", encoding="utf-8") as fh:
+            fh.write(str(28 * _GIB))
+        assert not guard.exceeded(), "page cache alone must never trip the guard"
+        assert "anon+shmem" in guard.describe(), guard.describe()
+
+        # Real anonymous growth still must.
+        M.unreclaimable_gb = lambda: 26.0
+        assert guard.exceeded(), "26 GiB of anon against a 30 GiB limit must fire"
+    finally:
+        M.cgroup_usage_gb, M.unreclaimable_gb = real_usage, real_unrec
+
+
+def test_guard_falls_back_to_the_total_without_a_breakdown() -> None:
+    """No memory.stat means no split; watching the total beats watching nothing."""
+    real_usage, real_unrec = M.cgroup_usage_gb, M.unreclaimable_gb
+    try:
+        used = _write("fb_used", str(27 * _GIB))
+        limit = _write("fb_limit", str(30 * _GIB))
+        M.cgroup_usage_gb = lambda pairs=None: real_usage(((used, limit),))
+        M.unreclaimable_gb = lambda: float("nan")
+        guard = MemoryGuard(frac=0.85)
+        assert guard.watches_total, "must fall back when the split is unavailable"
+        assert guard.exceeded(), "27 of 30 GiB must fire"
+        assert "cgroup total" in guard.describe(), guard.describe()
+    finally:
+        M.cgroup_usage_gb, M.unreclaimable_gb = real_usage, real_unrec
 
 
 if __name__ == "__main__":

@@ -70,6 +70,61 @@ def cgroup_usage_gb(pairs: tuple[tuple[str, str], ...] | None = None) -> tuple[f
     return float("nan"), float("nan")
 
 
+def cgroup_breakdown(stat_paths: tuple[str, ...] | None = None) -> dict:
+    """Split cgroup memory into anonymous, page cache and shared, in GiB.
+
+    The total is the wrong number to act on. Page cache is memory the kernel hands back
+    the moment anything else needs it, and a process that memory-maps a 3 GiB corpus will
+    park most of that corpus in page cache by design -- charged to the cgroup, counted in
+    the total, and in no way a leak.
+
+    What actually gets a container killed is memory that cannot be reclaimed: anonymous
+    pages, and shared memory, which is where DataLoader workers put the tensors they send
+    back. Those two are what the guard watches.
+
+    cgroup v2 names them ``anon`` and ``shmem``; v1 calls the anonymous part ``rss``.
+    Returns nan values where the file cannot be read.
+    """
+    paths = stat_paths or ("/sys/fs/cgroup/memory.stat",
+                           "/sys/fs/cgroup/memory/memory.stat")
+    for path in paths:
+        try:
+            with open(path, "r", encoding="utf-8") as fh:
+                fields = {}
+                for line in fh:
+                    parts = line.split()
+                    if len(parts) == 2:
+                        try:
+                            fields[parts[0]] = float(parts[1])
+                        except ValueError:
+                            continue
+        except Exception:
+            continue
+        if not fields:
+            continue
+        # v2: anon / file / shmem. v1: rss / cache / shmem.
+        anon = fields.get("anon", fields.get("rss", float("nan")))
+        cache = fields.get("file", fields.get("cache", float("nan")))
+        shmem = fields.get("shmem", float("nan"))
+        return {"anon_gb": anon / _GB if anon == anon else float("nan"),
+                "file_gb": cache / _GB if cache == cache else float("nan"),
+                "shmem_gb": shmem / _GB if shmem == shmem else float("nan")}
+    return {"anon_gb": float("nan"), "file_gb": float("nan"), "shmem_gb": float("nan")}
+
+
+def unreclaimable_gb() -> float:
+    """Anonymous + shared memory, in GiB -- the part the kernel cannot hand back.
+
+    Falls back to nan when the breakdown is unavailable, so callers can decide whether to
+    use the cgroup total instead of guessing.
+    """
+    parts = cgroup_breakdown()
+    anon, shmem = parts["anon_gb"], parts["shmem_gb"]
+    if anon != anon:
+        return float("nan")
+    return anon + (shmem if shmem == shmem else 0.0)
+
+
 def available_gb(meminfo_path: str = "/proc/meminfo") -> float:
     """MemAvailable from /proc/meminfo, in GiB -- what the host thinks is spare."""
     try:
@@ -83,10 +138,10 @@ def available_gb(meminfo_path: str = "/proc/meminfo") -> float:
 
 
 def snapshot() -> dict:
-    """All four numbers at once."""
+    """Every number at once, including the reclaimable/unreclaimable split."""
     used, limit = cgroup_usage_gb()
     return {"rss_gb": rss_gb(), "cgroup_gb": used, "cgroup_limit_gb": limit,
-            "available_gb": available_gb()}
+            "available_gb": available_gb(), "unreclaimable_gb": unreclaimable_gb()}
 
 
 def format_snapshot(tag: str = "") -> str:
@@ -102,6 +157,8 @@ def format_snapshot(tag: str = "") -> str:
                          f"({pct:.0f}%)")
         else:
             parts.append(f"cgroup {snap['cgroup_gb']:.1f}G")
+    if snap["unreclaimable_gb"] == snap["unreclaimable_gb"]:
+        parts.append(f"anon+shm {snap['unreclaimable_gb']:.1f}G")
     if snap["available_gb"] == snap["available_gb"]:
         parts.append(f"avail {snap['available_gb']:.1f}G")
     if not parts:
@@ -157,9 +214,13 @@ class MemoryGuard:
         self.limit_gb = limit
         self.enabled = limit == limit and limit > 0
         self.peak_gb = 0.0
+        # Watch anonymous + shared memory where the kernel exposes the split. The cgroup
+        # total counts page cache, and a run that memory-maps a 3 GiB corpus fills page
+        # cache on purpose -- acting on the total stops healthy runs.
+        self.watches_total = unreclaimable_gb() != unreclaimable_gb()
 
     def usage(self) -> float:
-        used, _ = cgroup_usage_gb()
+        used = cgroup_usage_gb()[0] if self.watches_total else unreclaimable_gb()
         if used == used:
             self.peak_gb = max(self.peak_gb, used)
         return used
@@ -180,8 +241,9 @@ class MemoryGuard:
     def describe(self) -> str:
         if not self.enabled:
             return "MemoryGuard(inert -- no cgroup limit readable)"
-        return (f"MemoryGuard(stop at {self.frac * 100:.0f}% of "
-                f"{self.limit_gb:.1f} GiB, peak seen {self.peak_gb:.1f} GiB)")
+        what = "cgroup total" if self.watches_total else "anon+shmem"
+        return (f"MemoryGuard(stop at {self.frac * 100:.0f}% of {self.limit_gb:.1f} GiB, "
+                f"watching {what}, peak seen {self.peak_gb:.1f} GiB)")
 
 
 class LeakWatch:
