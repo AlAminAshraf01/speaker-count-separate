@@ -265,6 +265,12 @@ class LeakWatch:
     for a trend.
     """
 
+    #: Stop only when the session would bank less than this share of its plan. Stopping
+    #: a run that can still do 90% of the work costs more than the leak does, and a
+    #: measurement taken over a few hundred steps is not precise enough to act on a
+    #: margin that fine.
+    MIN_USEFUL_FRACTION = 0.5
+
     def __init__(self, guard: "MemoryGuard | None", horizon: int,
                  warmup: int = 100, window: int = 200) -> None:
         self.guard = guard
@@ -275,6 +281,7 @@ class LeakWatch:
         self.origin: int | None = None
         self.slope_gb_per_step = float("nan")
         self.verdict = ""
+        self.share = float("nan")
 
     @property
     def enabled(self) -> bool:
@@ -308,14 +315,20 @@ class LeakWatch:
             return
         steps_left = headroom / self.slope_gb_per_step
         self.verdict = f"{self.slope_gb_per_step * 1024:.1f} MiB/step"
-        if steps_left < self.horizon:
+        share = self.share = steps_left / float(self.horizon)
+        if share < 1.0:
+            print(f"  NOTE: memory is growing {self.slope_gb_per_step * 1024:.1f} MiB per "
+                  f"step; at that rate this session reaches about "
+                  f"{100.0 * share:.0f}% of its {self.horizon} planned steps.", flush=True)
+        if share < self.MIN_USEFUL_FRACTION:
             raise MemoryBudgetExceeded(
                 f"memory is growing {self.slope_gb_per_step * 1024:.1f} MiB per step "
                 f"({used:.1f} GiB used of a {self.guard.limit_gb:.1f} GiB limit). "
                 f"At that rate the guard trips in {steps_left:.0f} steps, but this "
                 f"session planned {self.horizon}. It would spend the whole budget to "
-                f"bank {100.0 * steps_left / self.horizon:.0f}% of the work, so it is "
-                f"stopping now instead of hours from now")
+                f"bank {100.0 * share:.0f}% of the work -- under the "
+                f"{100.0 * self.MIN_USEFUL_FRACTION:.0f}% that makes a session worth "
+                f"running -- so it is stopping now instead of hours from now")
 
     def describe(self) -> str:
         if not self.enabled:
@@ -325,7 +338,12 @@ class LeakWatch:
                     f"steps, horizon {self.horizon})")
         if self.verdict == "flat":
             return "LeakWatch(no growth measured -- healthy)"
-        return f"LeakWatch(growth {self.verdict}, survivable for now)"
+        if self.share == self.share and self.share < self.MIN_USEFUL_FRACTION:
+            return (f"LeakWatch(growth {self.verdict}, reaches only "
+                    f"{100.0 * self.share:.0f}% of the session -- stopped)")
+        reach = (f", reaches {100.0 * self.share:.0f}% of the session"
+                 if self.share == self.share and self.share < 1.0 else "")
+        return f"LeakWatch(growth {self.verdict}{reach}, survivable)"
 
 
 if __name__ == "__main__":  # pragma: no cover - manual check

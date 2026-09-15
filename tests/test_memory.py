@@ -355,6 +355,40 @@ def test_guard_falls_back_to_the_total_without_a_breakdown() -> None:
         M.cgroup_usage_gb, M.unreclaimable_gb = real_usage, real_unrec
 
 
+def test_leakwatch_warns_but_runs_on_when_most_of_the_session_survives() -> None:
+    """The run this rule was loosened for: 4236 steps of headroom is four more epochs.
+
+    Stopping a session that can still do most of its work costs more than the growth
+    does, and a slope measured over a couple of hundred steps is not precise enough to
+    act on a narrow margin. It says so and carries on.
+    """
+    # 1.5 MiB/step from 6 GiB against a 30 GiB limit: headroom 19.5 GiB -> ~13300 steps,
+    # which is 66% of a 20000-step plan.
+    guard = _FakeGuard(start_gb=6.0, gb_per_step=1.5 / 1024.0)
+    watch = LeakWatch(guard, horizon=20000, warmup=100, window=200)
+    for step in range(0, 1200, 50):
+        guard.step = step
+        watch.observe(step)                      # must not raise
+    assert watch.slope_gb_per_step * 1024 > 1.0, watch.slope_gb_per_step
+    assert "survivable" in watch.describe(), watch.describe()
+
+
+def test_leakwatch_still_stops_when_most_of_the_session_is_wasted() -> None:
+    """13% of the plan is not worth eleven hours; the message has to say why."""
+    guard = _FakeGuard(start_gb=2.1, gb_per_step=8.0 / 1024.0)
+    watch = LeakWatch(guard, horizon=21000, warmup=100, window=200)
+    raised = ""
+    for step in range(0, 1000, 50):
+        guard.step = step
+        try:
+            watch.observe(step)
+        except MemoryBudgetExceeded as exc:
+            raised = str(exc)
+            break
+    assert raised, "8 MiB/step wasting 87% of a session must stop it"
+    assert "50%" in raised, raised
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):
