@@ -75,12 +75,38 @@ print("\ncheckpoints visible from a previous session:", previous or "none (first
 # numbers will sit a decibel or two below published baselines; that is expected and
 # defensible. Half a joint model plus half an interpretability study is not.
 #
-# ## If a session dies with `exit -9`
+# ## Memory
 #
-# That is the Linux OOM killer, not a bug in the model, and it means **host RAM** rather
-# than GPU memory. A Kaggle GPU session has far less RAM than a CPU one. The trainer now
-# prints a `ram ...` line at every log step and on both sides of validation, so the last
-# line before a kill says how close it was and which phase it was in. Send that line.
+# A session died with `exit -9` -- the Linux OOM killer, which takes the process with no
+# traceback. Telemetry showed the container limit is 30 GiB, startup sits at 2.1 GiB, and
+# RSS then climbed **8 MiB every step**, dead linear, until it hit the ceiling four hours
+# in. 8 MiB is exactly one batch: mix 1.15 + refs 5.76 + noise 1.15 MB.
+#
+# Reproducing it locally on CPU showed **no growth at all** -- with or without dataloader
+# workers -- so the dataset, loss, model, loader and worker paths are clear. That leaves
+# the CUDA-only pieces, of which exactly one allocates a batch of *host* memory per step:
+# `pin_memory`. Pinned memory comes from CUDA's caching host allocator and is never
+# returned to the OS. It is now **off by default** (`train.pin_memory: false`); it bought
+# a few milliseconds on a step that spends 1.7 seconds in compute.
+#
+# Three things now protect the run, so a wrong diagnosis costs minutes rather than hours:
+#
+# | | |
+# |---|---|
+# | `ram ...` on every log line | you can see the slope yourself |
+# | **LeakWatch** | samples the slope early, and if the session could not finish what it planned, stops in the first few minutes |
+# | **MemoryGuard** | backstop at 85 % of the limit: saves a checkpoint, prints the phase, exits 0 so the notebook still commits |
+#
+# **If it still grows**, the log will say so within about ten minutes instead of four
+# hours. Then try these in order, each as an extra `--set` on the training command:
+#
+# ```
+# train.num_workers=1      # halve the worker processes
+# train.num_workers=0      # load in-process; slower, but nothing crosses a process boundary
+# train.dataparallel=False # one GPU, no replica machinery (about half the throughput)
+# ```
+#
+# Send me the `ram` lines either way -- the slope is the diagnosis.
 
 # %%
 CONFIG = "configs/paper.yaml"

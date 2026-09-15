@@ -51,6 +51,7 @@ train:
   epochs: 60                  # a budget decision, not an ambition -- see docs/DESIGN.md
   steps_per_epoch: 1000
   num_workers: 2              # Kaggle GPU notebooks have 4 vCPU
+  pin_memory: false           # pinned host memory is never returned to the OS
   amp: true                   # fp16 on T4; the loss body is forced back to fp32
   grad_clip: 5.0
   accum: 1

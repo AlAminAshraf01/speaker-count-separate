@@ -77,8 +77,8 @@ def main() -> int:
     from csnet.engine import build_optimizer, evaluate, measure_throughput, train_one_epoch
     from csnet.losses import RectangularPITLoss
     from csnet.model import build_model
-    from csnet.memory import (MemoryBudgetExceeded, MemoryGuard, log_memory,
-                              release)
+    from csnet.memory import (LeakWatch, MemoryBudgetExceeded, MemoryGuard,
+                              log_memory, release)
     from csnet.utils import human_time, json_dump_atomic, pick_device, seed_everything
 
     cfg = load_cfg(resolve(args.config), args.set)
@@ -134,12 +134,14 @@ def main() -> int:
                                max_n_src=cfg.model.max_n_src)
 
     train_loader = build_loader(train_set, batch_size=cfg.train.batch_size, shuffle=False,
-                                num_workers=cfg.train.num_workers, drop_last=True)
+                                num_workers=cfg.train.num_workers, drop_last=True,
+                                pin_memory=cfg.train.pin_memory)
     # The validation loader is entered once per epoch, so persistent workers would just be
     # processes holding a memory-mapped corpus open between uses -- host RAM a Kaggle GPU
     # session does not have to spare. Single-process costs a few seconds per epoch.
     dev_loader = build_loader(dev_set, batch_size=cfg.train.batch_size, shuffle=False,
-                              num_workers=int(args.val_workers), persistent=False)
+                              num_workers=int(args.val_workers), persistent=False,
+                              pin_memory=cfg.train.pin_memory)
     print(f"\ntrain: {train_store.split} dynamic mixing, {cfg.train.steps_per_epoch} steps/epoch"
           f" x batch {cfg.train.batch_size} | {train_bank.describe()}")
     print(f"dev  : {len(dev_set)} frozen mixtures {dev_set.counts_per_n()} from {recipes_dev}")
@@ -202,6 +204,9 @@ def main() -> int:
     save_cfg(cfg, os.path.join(out_dir, "config.yaml"))
 
     # ---------------------------------------------------------------- throughput
+    planned_steps = max(1, (int(cfg.train.epochs) - start_epoch)
+                        * int(cfg.train.steps_per_epoch))
+    horizon_steps = planned_steps
     if not args.no_throughput and not args.dry_run:
         stats = measure_throughput(model, train_loader, loss_fn, optimizer, scaler, device,
                                    steps=20, amp=use_amp)
@@ -213,6 +218,9 @@ def main() -> int:
         print(f"  {stats['steps_per_hour']:8.0f} steps per hour   ~{stats['tflops']:.2f} TFLOP/s")
         print(f"  budget remaining {budget.remaining_h():.2f} h -> about "
               f"{epochs_left:.1f} epochs of {cfg.train.steps_per_epoch} steps")
+        # What this session will actually attempt: whichever of the plan and the budget
+        # runs out first. That is the bar a memory leak has to clear to be survivable.
+        horizon_steps = max(1, min(planned_steps, int(steps_left)))
         if start_epoch + epochs_left < cfg.train.epochs:
             print(f"  NOTE: cfg.train.epochs={cfg.train.epochs} will NOT finish this session.")
             print("        That is fine -- it resumes. But decide the epoch count now and")
@@ -230,8 +238,10 @@ def main() -> int:
                         cfg_dict=cfg_to_dict(cfg), wall_h=budget.total_h())
 
     mem_guard = MemoryGuard(frac=float(args.mem_guard_frac)) if args.mem_guard_frac > 0 else None
+    leak_watch = LeakWatch(mem_guard, horizon_steps) if mem_guard else None
     if mem_guard is not None:
         print(mem_guard.describe())
+        print(leak_watch.describe())
 
     # ---------------------------------------------------------------- loop
     banner("training")
@@ -255,7 +265,8 @@ def main() -> int:
                 scheduler=scheduler, grad_clip=cfg.train.grad_clip,
                 log_every=cfg.train.log_every, budget=budget, global_step=global_step,
                 amp=use_amp, accum=cfg.train.accum, on_step=on_step,
-                max_steps=cfg.train.steps_per_epoch, mem_guard=mem_guard)
+                max_steps=cfg.train.steps_per_epoch, mem_guard=mem_guard,
+                leak_watch=leak_watch)
             global_step = int(train_logs["global_step"])
             stopped_early = bool(train_logs["stopped_early"])
 
@@ -344,6 +355,7 @@ def main() -> int:
         print(exc)
         log_memory("at the stop")
         print(mem_guard.describe())
+        print(leak_watch.describe())
         print("")
         print("This is the container memory limit, not GPU memory. To try, in order:")
         print("  1. --set train.num_workers=1   (each worker holds the corpus open)")

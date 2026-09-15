@@ -51,6 +51,11 @@ class TrainCfg:
     epochs: int = 60
     steps_per_epoch: int = 1000
     num_workers: int = 2
+    # Pinned host memory is allocated through CUDA's caching host allocator and is
+    # never returned to the OS. It buys a few ms per step on a run that spends 1.7 s
+    # in compute, and it is the only per-batch host allocation in the CUDA path, so
+    # it is off unless someone measures a reason to turn it on.
+    pin_memory: bool = False
     amp: bool = True
     grad_clip: float = 5.0
     accum: int = 1

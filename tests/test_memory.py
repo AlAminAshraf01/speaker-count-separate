@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
                                 "src"))
 
 import csnet.memory as M
-from csnet.memory import (MemoryBudgetExceeded, MemoryGuard, available_gb,
+from csnet.memory import (LeakWatch, MemoryBudgetExceeded, MemoryGuard, available_gb,
                           cgroup_usage_gb, format_snapshot, log_memory, release,
                           rss_gb, snapshot)
 
@@ -175,6 +175,85 @@ def test_guard_tracks_its_peak() -> None:
         assert "peak seen 5.0" in guard.describe(), guard.describe()
     finally:
         M.cgroup_usage_gb = real
+
+
+class _FakeGuard:
+    """A guard whose usage follows a chosen growth rate, so slopes can be tested exactly."""
+
+    def __init__(self, start_gb: float, gb_per_step: float, limit_gb: float = 30.0,
+                 frac: float = 0.85) -> None:
+        self.start, self.rate = float(start_gb), float(gb_per_step)
+        self.limit_gb, self.frac, self.enabled = float(limit_gb), float(frac), True
+        self.step = 0
+
+    def usage(self) -> float:
+        return self.start + self.rate * self.step
+
+
+def test_leakwatch_stops_a_run_that_cannot_finish_an_epoch() -> None:
+    """The measured failure: 8 MiB/step from 2.1 GiB against a 30 GiB limit.
+
+    The session planned 21 epochs of 1000 steps. 8 MiB/step eats the headroom in about
+    2700 steps, so it would spend eleven hours of quota to bank under three epochs. That
+    has to be caught in the first few minutes, not the fourth hour.
+    """
+    guard = _FakeGuard(start_gb=2.1, gb_per_step=8.0 / 1024.0)
+    watch = LeakWatch(guard, horizon=21000, warmup=100, window=200)
+    raised = None
+    for step in range(0, 1000, 50):
+        guard.step = step
+        try:
+            watch.observe(step)
+        except MemoryBudgetExceeded as exc:
+            raised = (step, str(exc))
+            break
+    assert raised, "8 MiB/step must be caught"
+    step, message = raised
+    assert step <= 350, f"caught at step {step}: too late to be useful"
+    assert "8.0 MiB per step" in message, message
+    assert "stopping now" in message, message
+    assert abs(watch.slope_gb_per_step * 1024 - 8.0) < 0.01, watch.slope_gb_per_step
+
+
+def test_leakwatch_tolerates_growth_the_session_can_absorb() -> None:
+    """Slow growth is not a reason to throw away a session that can still do the work."""
+    guard = _FakeGuard(start_gb=2.1, gb_per_step=0.05 / 1024.0)     # 0.05 MiB/step
+    watch = LeakWatch(guard, horizon=21000, warmup=100, window=200)
+    for step in range(0, 2000, 50):
+        guard.step = step
+        watch.observe(step)                                          # must not raise
+    assert "survivable" in watch.describe(), watch.describe()
+
+
+def test_leakwatch_reports_a_flat_run_as_healthy() -> None:
+    guard = _FakeGuard(start_gb=4.0, gb_per_step=0.0)
+    watch = LeakWatch(guard, horizon=21000, warmup=100, window=200)
+    for step in range(0, 1000, 50):
+        guard.step = step
+        watch.observe(step)
+    assert watch.describe() == "LeakWatch(no growth measured -- healthy)", watch.describe()
+
+
+def test_leakwatch_ignores_startup_allocations() -> None:
+    """A big one-off jump before warmup must not be read as a trend."""
+    guard = _FakeGuard(start_gb=2.0, gb_per_step=0.0)
+    watch = LeakWatch(guard, horizon=21000, warmup=100, window=200)
+    for step in range(0, 100, 25):        # startup: 2 -> 6 GiB, all before warmup
+        guard.start = 2.0 + step * 0.04
+        guard.step = step
+        watch.observe(step)
+    guard.start = 6.0                      # then completely flat
+    for step in range(100, 800, 50):
+        guard.step = step
+        watch.observe(step)                # must not raise
+    assert "healthy" in watch.describe(), watch.describe()
+
+
+def test_leakwatch_is_inert_without_a_guard() -> None:
+    watch = LeakWatch(None, horizon=21000)
+    for step in range(0, 1000, 50):
+        watch.observe(step)
+    assert not watch.enabled and "inert" in watch.describe()
 
 
 if __name__ == "__main__":

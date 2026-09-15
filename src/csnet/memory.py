@@ -184,6 +184,82 @@ class MemoryGuard:
                 f"{self.limit_gb:.1f} GiB, peak seen {self.peak_gb:.1f} GiB)")
 
 
+class LeakWatch:
+    """Catch a per-step memory leak in the first few minutes instead of the fourth hour.
+
+    A run that grows a fixed amount every step dies at a predictable step, and the slope
+    is measurable long before it gets there: two samples a few hundred steps apart give
+    GiB per step, and headroom divided by that slope gives the step it will be killed on.
+    Compare that against ``horizon`` -- the steps this session actually set out to run --
+    and the verdict is available within minutes.
+
+    The horizon is the session's plan, not one epoch. The failure this was written for
+    grew 8 MiB/step: enough to finish two epochs comfortably and then die in the fifth,
+    which spends eleven hours of quota to bank four epochs of a twenty-one epoch session.
+    A leak that merely survives one epoch is not survivable.
+
+    Sampling starts after ``warmup`` steps so that one-off startup allocations (cuDNN
+    workspaces, the first autograd graph, lazily mapped corpus pages) are not mistaken
+    for a trend.
+    """
+
+    def __init__(self, guard: "MemoryGuard | None", horizon: int,
+                 warmup: int = 100, window: int = 200) -> None:
+        self.guard = guard
+        self.horizon = max(1, int(horizon))
+        self.warmup = max(1, int(warmup))
+        self.window = max(1, int(window))
+        self.first: tuple[int, float] | None = None
+        self.slope_gb_per_step = float("nan")
+        self.verdict = ""
+
+    @property
+    def enabled(self) -> bool:
+        return self.guard is not None and self.guard.enabled
+
+    def observe(self, step: int) -> None:
+        """Record a sample; raise if the projection says this session cannot finish."""
+        if not self.enabled or self.verdict:
+            return
+        used = self.guard.usage()
+        if used != used:
+            return
+        if self.first is None:
+            if step >= self.warmup:
+                self.first = (step, used)
+            return
+        first_step, first_used = self.first
+        if step - first_step < self.window:
+            return
+
+        self.slope_gb_per_step = (used - first_used) / float(step - first_step)
+        limit = self.guard.frac * self.guard.limit_gb
+        headroom = limit - used
+        if self.slope_gb_per_step <= 0:
+            self.verdict = "flat"
+            return
+        steps_left = headroom / self.slope_gb_per_step
+        self.verdict = f"{self.slope_gb_per_step * 1024:.1f} MiB/step"
+        if steps_left < self.horizon:
+            raise MemoryBudgetExceeded(
+                f"memory is growing {self.slope_gb_per_step * 1024:.1f} MiB per step "
+                f"({used:.1f} GiB used of a {self.guard.limit_gb:.1f} GiB limit). "
+                f"At that rate the guard trips in {steps_left:.0f} steps, but this "
+                f"session planned {self.horizon}. It would spend the whole budget to "
+                f"bank {100.0 * steps_left / self.horizon:.0f}% of the work, so it is "
+                f"stopping now instead of hours from now")
+
+    def describe(self) -> str:
+        if not self.enabled:
+            return "LeakWatch(inert -- no cgroup limit readable)"
+        if not self.verdict:
+            return (f"LeakWatch(sampling from step {self.warmup} over {self.window} "
+                    f"steps, horizon {self.horizon})")
+        if self.verdict == "flat":
+            return "LeakWatch(no growth measured -- healthy)"
+        return f"LeakWatch(growth {self.verdict}, survivable for now)"
+
+
 if __name__ == "__main__":  # pragma: no cover - manual check
     print(format_snapshot("self-test"))
     print(snapshot())

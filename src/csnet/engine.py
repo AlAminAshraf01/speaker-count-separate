@@ -14,7 +14,7 @@ import numpy as np
 import torch
 
 from .constants import MAX_N_SRC, N_LIST, class_to_n
-from .memory import MemoryGuard, format_snapshot
+from .memory import LeakWatch, MemoryGuard, format_snapshot
 from .metrics import matched_si_sdri, p_si_snr, si_sdr, summarise_per_n
 from .utils import get_logger
 
@@ -65,8 +65,13 @@ def is_plateau(scheduler: Any) -> bool:
 
 
 def move_batch(batch: dict, device: torch.device) -> dict:
-    """Move every tensor in a collated batch to ``device`` (strings pass through)."""
-    return {k: (v.to(device, non_blocking=True) if torch.is_tensor(v) else v)
+    """Move every tensor in a collated batch to ``device`` (strings pass through).
+
+    ``non_blocking`` only does anything for pinned source memory -- on pageable memory it
+    is a silent no-op -- and pairing it with an unpinned source is the classic way to get
+    a copy the caller believes is synchronised when it is not. Ask the tensor.
+    """
+    return {k: (v.to(device, non_blocking=v.is_pinned()) if torch.is_tensor(v) else v)
             for k, v in batch.items()}
 
 
@@ -78,6 +83,7 @@ def train_one_epoch(model: torch.nn.Module, loader: Any, loss_fn: torch.nn.Modul
                     budget: Any = None, global_step: int = 0, amp: bool = True,
                     accum: int = 1, on_step: Callable[[int, dict], None] | None = None,
                     mem_guard: "MemoryGuard | None" = None,
+                    leak_watch: "LeakWatch | None" = None,
                     budget_check_every: int = 20, max_steps: int | None = None,
                     progress: bool = True) -> dict:
     """One pass over ``loader``. Returns aggregated logs plus ``stopped_early``."""
@@ -142,6 +148,8 @@ def train_one_epoch(model: torch.nn.Module, loader: Any, loss_fn: torch.nn.Modul
                      optimizer.param_groups[0]["lr"], format_snapshot())
         if mem_guard is not None and n_batches % mem_guard.check_every == 0:
             mem_guard.check(f"training step {step}")
+            if leak_watch is not None:
+                leak_watch.observe(step)
         if budget is not None and n_batches % max(1, budget_check_every) == 0 and budget.expired():
             LOG.warning("time budget reached after %d steps -- stopping cleanly", n_batches)
             stopped_early = True
