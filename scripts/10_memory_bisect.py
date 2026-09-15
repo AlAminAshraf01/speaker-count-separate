@@ -31,7 +31,8 @@ import subprocess
 import sys
 import time
 
-from _common import add_common_args, banner, build_store_and_bank, require_store, resolve
+from _common import (add_common_args, banner, build_store_and_bank, code_version,
+                     require_store, resolve)
 
 # Ordered by suspicion, so the likely answer arrives early: if the run is cut short, the
 # rows that did finish are still the ones worth having.
@@ -181,6 +182,7 @@ def main() -> int:
 
     banner("10 - memory bisect")
     print(f"store  : {store_root}")
+    print(f"code   : {code_version()}")
     print(f"budget : {args.warmup} warmup + {args.steps} measured steps per configuration")
     print(f"configs: {', '.join(names)}")
     print(format_snapshot("at start"))

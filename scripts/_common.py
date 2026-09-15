@@ -20,6 +20,30 @@ if SRC_ROOT not in sys.path:
     sys.path.insert(0, SRC_ROOT)
 
 
+def code_version() -> str:
+    """``<short sha> <date>`` for the checked-out repo, or the package version.
+
+    Printed by every long-running script. A log that cannot be traced to a commit is a
+    log that can be read for an hour before anyone notices it came from yesterday's code.
+    """
+    import subprocess
+
+    try:
+        out = subprocess.run(["git", "-C", REPO_ROOT, "log", "-1", "--format=%h %cs"],
+                             capture_output=True, text=True, timeout=10)
+        if out.returncode == 0 and out.stdout.strip():
+            return out.stdout.strip()
+    except Exception:
+        pass
+    try:
+        import csnet
+
+        return f"csnet {csnet.__version__} (no git metadata)"
+    except Exception:
+        return "unknown"
+
+
+
 def resolve(path: str | None, base: str = REPO_ROOT) -> str | None:
     """Make a relative path absolute against the repo root."""
     if path is None:

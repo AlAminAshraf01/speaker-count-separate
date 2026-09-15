@@ -31,7 +31,8 @@ import time
 import numpy as np
 import torch
 
-from _common import banner, build_store_and_bank, require_store, resolve
+from _common import (banner, build_store_and_bank, code_version, require_store,
+                     resolve)
 
 
 def _open_log(path: str, fields: list[str]):
@@ -106,6 +107,7 @@ def main() -> int:
     banner("04 - train")
     print(cfg.summary())
     print(f"\ndevice: {device} | cuda devices: {torch.cuda.device_count()}")
+    print(f"code  : {code_version()}")
 
     # ---------------------------------------------------------------- data
     train_store, train_bank = build_store_and_bank(
