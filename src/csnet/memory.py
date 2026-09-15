@@ -210,6 +210,7 @@ class LeakWatch:
         self.warmup = max(1, int(warmup))
         self.window = max(1, int(window))
         self.first: tuple[int, float] | None = None
+        self.origin: int | None = None
         self.slope_gb_per_step = float("nan")
         self.verdict = ""
 
@@ -224,8 +225,13 @@ class LeakWatch:
         used = self.guard.usage()
         if used != used:
             return
+        if self.origin is None:
+            # Count warmup from the first observation, not from the global step. A resumed
+            # session starts at step 5600, which is already past any absolute warmup, so an
+            # absolute comparison would sample startup allocations as steady state.
+            self.origin = step
         if self.first is None:
-            if step >= self.warmup:
+            if step - self.origin >= self.warmup:
                 self.first = (step, used)
             return
         first_step, first_used = self.first

@@ -97,16 +97,21 @@ print("\ncheckpoints visible from a previous session:", previous or "none (first
 # | **LeakWatch** | samples the slope early, and if the session could not finish what it planned, stops in the first few minutes |
 # | **MemoryGuard** | backstop at 85 % of the limit: saves a checkpoint, prints the phase, exits 0 so the notebook still commits |
 #
-# **If it still grows**, the log will say so within about ten minutes instead of four
-# hours. Then try these in order, each as an extra `--set` on the training command:
+# `pin_memory: false` was the first attempt and it **did not help** -- the growth was
+# bit-identical with and without it (cgroup 6.4 -> 7.9 GiB over the same 100 steps, both
+# runs). That leaves AMP, DataParallel and the dataloader workers, and guessing at those
+# one eleven-hour run at a time would cost a week of quota.
 #
-# ```
-# train.num_workers=1      # halve the worker processes
-# train.num_workers=0      # load in-process; slower, but nothing crosses a process boundary
-# train.dataparallel=False # one GPU, no replica machinery (about half the throughput)
-# ```
+# ## Finding it in fifteen minutes instead: `10_memory_bisect.py`
 #
-# Send me the `ram` lines either way -- the slope is the diagnosis.
+# Set `BISECT = True` in the cell below and run the notebook. It runs the real training
+# loop five times over -- baseline, no AMP, no DataParallel, no workers, and no AMP with
+# no DataParallel -- measuring the memory slope of each over a short window, then prints a
+# table. **The configuration that comes out flat names the culprit.** Nothing is trained
+# and nothing is saved.
+#
+# When the table comes back, put the winning switch in `configs/base.yaml` (or pass it as
+# `--set`), set `BISECT = False`, and train normally.
 
 # %%
 CONFIG = "configs/paper.yaml"
@@ -136,17 +141,29 @@ run(f"python scripts/04_train.py --config {CONFIG}"
 # `last.pt` in any attached dataset, otherwise start fresh.
 
 # %%
-run(f"python scripts/04_train.py"
-    f" --config {CONFIG}"
-    f" --store {STORE}"
-    f" --recipes_dev {RECIPES_DEV}"
-    f" --ckpt_dir {CKPT_DIR}"
-    f" --resume auto"
-    f" --time_budget_h {TIME_BUDGET_H}"
-    f" --best_metric p_si_snr"
-    f" --set train.epochs={EPOCHS}"
-    f" train.batch_size={BATCH_SIZE}"
-    f" train.steps_per_epoch={STEPS_PER_EPOCH}")
+BISECT = False       # True: spend ~15 min finding which component leaks, and train nothing
+
+if BISECT:
+    run(f"python scripts/10_memory_bisect.py --store {STORE}"
+        f" --config {CONFIG} --warmup 40 --steps 120"
+        f" --set train.batch_size={BATCH_SIZE}")
+
+# %%
+if not BISECT:
+    run(f"python scripts/04_train.py"
+        f" --config {CONFIG}"
+        f" --store {STORE}"
+        f" --recipes_dev {RECIPES_DEV}"
+        f" --ckpt_dir {CKPT_DIR}"
+        f" --resume auto"
+        f" --time_budget_h {TIME_BUDGET_H}"
+        f" --best_metric p_si_snr"
+        f" --set train.epochs={EPOCHS}"
+        f" train.batch_size={BATCH_SIZE}"
+        f" train.steps_per_epoch={STEPS_PER_EPOCH}")
+else:
+    print("BISECT is True -- skipping training. Set it back to False once the table")
+    print("above names the component to switch off.")
 
 # %% [markdown]
 # ## Progress
@@ -157,8 +174,14 @@ from IPython.display import display
 import matplotlib.pyplot as plt
 
 log = os.path.join(CKPT_DIR, "train_log.csv")
-if os.path.exists(log):
-    df = pd.read_csv(log)
+df = pd.read_csv(log) if os.path.exists(log) else None
+if df is not None and df.empty:
+    # A session that stopped before finishing an epoch writes a header and no rows.
+    # Plotting that raises, which turns a clean stop into a failed notebook.
+    print("train_log.csv has no completed epochs yet -- this session stopped early.")
+    print("The checkpoint is still saved; the curves appear once an epoch finishes.")
+    df = None
+if df is not None:
     display(df.tail(12))
 
     fig, axes = plt.subplots(1, 3, figsize=(14, 3.4))
@@ -178,9 +201,13 @@ if os.path.exists(log):
     plt.show()
 
     print(f"total wall clock across all sessions: {df['wall_h'].max():.2f} h")
-    print(f"best val P-SI-SNR: {df['val_p_si_snr'].max():.2f} dB "
-          f"at epoch {int(df.loc[df['val_p_si_snr'].idxmax(), 'epoch'])}")
-else:
+    best = df["val_p_si_snr"].dropna()
+    if best.empty:
+        print("no validated epoch yet, so there is no best P-SI-SNR to report")
+    else:
+        print(f"best val P-SI-SNR: {best.max():.2f} dB "
+              f"at epoch {int(df.loc[best.idxmax(), 'epoch'])}")
+elif not os.path.exists(log):
     print("no train_log.csv yet")
 
 # %%

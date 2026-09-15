@@ -256,6 +256,29 @@ def test_leakwatch_is_inert_without_a_guard() -> None:
     assert not watch.enabled and "inert" in watch.describe()
 
 
+def test_leakwatch_warmup_is_relative_to_the_first_observation() -> None:
+    """A resumed session starts at a large global step; warmup must still apply.
+
+    Session two resumes at step 5600. With an absolute warmup the very first sample lands
+    50 steps into the epoch, while cuDNN workspaces and the first autograd graph are still
+    being allocated, and that startup jump is then read as the steady-state slope.
+    """
+    guard = _FakeGuard(start_gb=2.1, gb_per_step=0.0)
+    watch = LeakWatch(guard, horizon=21000, warmup=100, window=200)
+
+    # 100 steps of startup: 2.1 -> 6.1 GiB, then perfectly flat.
+    for offset in range(0, 100, 25):
+        guard.start = 2.1 + offset * 0.04
+        guard.step = 0
+        watch.observe(5600 + offset)
+    guard.start = 6.1
+    for offset in range(100, 900, 50):
+        watch.observe(5600 + offset)        # must not raise: the run is flat
+
+    assert watch.origin == 5600, watch.origin
+    assert "healthy" in watch.describe(), watch.describe()
+
+
 if __name__ == "__main__":
     passed = failed = 0
     for name, fn in sorted(globals().items()):
