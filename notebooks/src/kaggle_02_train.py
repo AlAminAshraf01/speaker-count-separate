@@ -150,9 +150,14 @@ print("\ncheckpoints visible from a previous session:", previous or "none (first
 #
 # The 13.5 hours of separator training are worth keeping; only the head needs redoing.
 # Set `RECOVER = True` in the cell below: it resumes from your checkpoint, re-initialises
-# the head, freezes the separator, and trains the counting head alone -- which is Gate 6 of
-# the plan, and takes about two hours rather than eleven because no separation gradients
-# are computed.
+# the head, freezes the separator, and trains the counting head alone -- Gate 6 of the plan.
+# With the separator frozen a step takes **331 ms instead of 1045**, so 12 epochs is about
+# **70 minutes**, not eleven hours.
+#
+# Note `--extra_epochs 12` rather than `--set train.epochs=12`. `train.epochs` is an
+# absolute target: resuming at epoch 38 and asking for 12 gives `range(38, 12)`, which is
+# empty, so the run trains nothing and exits 0. The trainer now refuses that instead of
+# pretending it worked.
 
 # %%
 CONFIG = "configs/paper.yaml"
@@ -204,8 +209,8 @@ elif RECOVER:
         f" --resume auto --reset_count_head"
         f" --time_budget_h {TIME_BUDGET_H}"
         f" --best_metric count_acc"
-        f" --set train.epochs=12"
-        f" train.batch_size={BATCH_SIZE}"
+        f" --extra_epochs 12"          # more epochs from here, not an absolute target
+        f" --set train.batch_size={BATCH_SIZE}"
         f" train.steps_per_epoch={STEPS_PER_EPOCH}"
         f" train.freeze_separator=True"
         f" loss.w_sep=0.0 loss.w_sil=0.0 loss.w_noise=0.0")

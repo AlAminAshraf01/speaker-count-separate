@@ -59,6 +59,10 @@ def main() -> int:
     ap.add_argument("--resume", default="auto", help="auto | none | /path/to/last.pt")
     ap.add_argument("--time_budget_h", type=float, default=None)
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--extra_epochs", type=int, default=None,
+                    help="train this many MORE epochs from wherever the checkpoint left "
+                         "off. train.epochs is an absolute target, so resuming at epoch 38 "
+                         "with train.epochs=12 asks for a range that is already finished.")
     ap.add_argument("--reset_count_head", action="store_true",
                     help="re-initialise the counting head after resuming, "
                          "keeping the separator. Use when a head has "
@@ -217,7 +221,11 @@ def main() -> int:
         history = list(state.get("history", []))
         consumed_h = float(state.get("wall_h", 0.0))
         was = (state.get("extra") or {}).get("best_metric_name")
-        if was and was != args.best_metric:
+        if was is None and best_metric == best_metric and best_metric != float("-inf"):
+            print(f"  checkpoint does not record which metric its best ({best_metric:.3f}) "
+                  f"belongs to, so it starts over")
+            best_metric = float("-inf")
+        elif was and was != args.best_metric:
             # "best" is a number on one metric's scale. Carrying a P-SI-SNR of -21.8 into a
             # run scored on accuracy would make the first epoch look like a record.
             print(f"  best_metric changed ({was} -> {args.best_metric}); "
@@ -242,6 +250,24 @@ def main() -> int:
     save_cfg(cfg, os.path.join(out_dir, "config.yaml"))
 
     # ---------------------------------------------------------------- throughput
+    if args.extra_epochs is not None:
+        cfg.train.epochs = start_epoch + max(1, int(args.extra_epochs))
+        print(f"target: {args.extra_epochs} more epochs from epoch {start_epoch} "
+              f"-> train.epochs = {cfg.train.epochs}")
+    elif start_epoch >= int(cfg.train.epochs):
+        # range(38, 12) is empty. Without this the run trains nothing, exits 0 and
+        # reports "epochs completed: 39", which looks like success.
+        raise SystemExit('\n'.join([
+            f"nothing to train: resuming at epoch {start_epoch} with "
+            f"train.epochs={cfg.train.epochs}.",
+            "  train.epochs is an absolute target, not a count of additional epochs,",
+            f"  so range({start_epoch}, {cfg.train.epochs}) is empty: this run would",
+            "  do nothing and exit 0. Say what you meant instead:",
+            "    --extra_epochs 12          12 more epochs from here",
+            f"    --set train.epochs={start_epoch + 12}      the same thing, absolute",
+            "    --resume none              start over",
+        ]))
+
     planned_steps = max(1, (int(cfg.train.epochs) - start_epoch)
                         * int(cfg.train.steps_per_epoch))
     horizon_steps = planned_steps
@@ -285,9 +311,11 @@ def main() -> int:
     # ---------------------------------------------------------------- loop
     banner("training")
     stopped_early = False
+    ran_any = False
     epoch = start_epoch
     try:
         for epoch in range(start_epoch, int(cfg.train.epochs)):
+            ran_any = True
             train_set.set_epoch(epoch)
             t0 = time.time()
 
@@ -424,7 +452,8 @@ def main() -> int:
         log_handle.close()
 
     banner("done")
-    print(f"epochs completed : {epoch + (0 if stopped_early else 1)}")
+    print(f"epochs completed : {epoch + (0 if stopped_early else 1) if ran_any else 0}"
+          f"{'' if ran_any else '  (no epoch ran)'}")
     print(f"global step      : {global_step}")
     print(f"best {args.best_metric:<12}: {best_metric:.3f}")
     print(f"wall clock       : {human_time(budget.total_h() * 3600)} across all sessions")
