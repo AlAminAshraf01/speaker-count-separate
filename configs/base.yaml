@@ -59,7 +59,14 @@ train:
   sched: cosine               # cosine | plateau | none
   time_budget_h: 11.0         # stop cleanly before Kaggle's 12 h cap
   seed: 72
-  dataparallel: true          # uses both T4s when the accelerator is "GPU T4 x2"
+  # Measured on GPU T4 x2 with scripts/10_memory_bisect.py, batch 12:
+  #   dataparallel: true   -> 17.3 MiB/step of host memory leaked, 1750 ms/step
+  #   dataparallel: false  ->  0.1 MiB/step,                        1140 ms/step
+  # It leaks and it is slower. Replicating a 5.3 M-parameter model across two GPUs
+  # every forward, then gathering (B, 6, 24000) outputs back, costs more than the
+  # second T4 returns on a model this small. It also crashed with "CUDA error:
+  # misaligned address" in fp32, in a fresh process, twice.
+  dataparallel: false
   val_every: 1
   val_batches: null           # null = the whole frozen dev set
   ckpt_dir: /kaggle/working/ckpt

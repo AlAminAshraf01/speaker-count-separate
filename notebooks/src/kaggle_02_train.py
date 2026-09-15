@@ -75,43 +75,60 @@ print("\ncheckpoints visible from a previous session:", previous or "none (first
 # numbers will sit a decibel or two below published baselines; that is expected and
 # defensible. Half a joint model plus half an interpretability study is not.
 #
-# ## Memory
+# ## Memory: it was DataParallel
 #
 # A session died with `exit -9` -- the Linux OOM killer, which takes the process with no
-# traceback. Telemetry showed the container limit is 30 GiB, startup sits at 2.1 GiB, and
-# RSS then climbed **8 MiB every step**, dead linear, until it hit the ceiling four hours
-# in. 8 MiB is exactly one batch: mix 1.15 + refs 5.76 + noise 1.15 MB.
+# traceback. Telemetry showed the container limit is 30 GiB and host memory then climbed
+# about 8 MiB **every step**, dead linear, until it hit the ceiling four hours in. 8 MiB is
+# one batch: mix 1.15 + refs 5.76 + noise 1.15 MB.
 #
-# Reproducing it locally on CPU showed **no growth at all** -- with or without dataloader
-# workers -- so the dataset, loss, model, loader and worker paths are clear. That leaves
-# the CUDA-only pieces, of which exactly one allocates a batch of *host* memory per step:
-# `pin_memory`. Pinned memory comes from CUDA's caching host allocator and is never
-# returned to the OS. It is now **off by default** (`train.pin_memory: false`); it bought
-# a few milliseconds on a step that spends 1.7 seconds in compute.
+# `scripts/10_memory_bisect.py` settled it in one 13-minute run by measuring the memory
+# slope of the real training loop with one component switched off at a time:
 #
-# Three things now protect the run, so a wrong diagnosis costs minutes rather than hours:
+# | configuration | cgroup MiB/step | rss MiB/step | ms/step |
+# |---|---|---|---|
+# | baseline | 17.34 | 7.97 | 1750 |
+# | workers 0 | 8.12 | 12.74 | 1792 |
+# | **no dataparallel** | **0.13** | **0.00** | **1140** |
+# | workers 0 + no dataparallel | 0.04 | 4.66 | 1177 |
+#
+# Both flat rows have DataParallel off; both leaking rows have it on. So
+# `train.dataparallel` is now **false** in `configs/base.yaml`, and that is a win three
+# times over:
+#
+# * the leak is gone -- 0.1 MiB/step instead of 17;
+# * it is **35 % faster** -- 1140 ms/step against 1750. Replicating a 5.3 M-parameter
+#   model across two GPUs every forward and gathering `(B, 6, 24000)` outputs back costs
+#   more than the second T4 returns on a model this small;
+# * the `no amp` configuration crashed twice with `CUDA error: misaligned address`, in a
+#   fresh process each time, and only ever with DataParallel on.
+#
+# **The second T4 is now idle.** That is the right trade at this model size, and the
+# measurement above is the justification to put in the report.
+#
+# ## Budget, re-measured
+#
+# At **1140 ms/step**, 1000 steps plus validation is about **21 minutes an epoch**, so an
+# 11-hour session buys roughly **31 epochs** rather than 21.
+#
+# | EPOCHS | sessions | GPU-h |
+# |---|---|---|
+# | 40 | 2 | ~15 |
+# | 60 | 2 | ~22 |
+#
+# 40 stays the default. State it in the report as a budget decision.
+#
+# ## If memory ever climbs again
+#
+# Three things watch for it, so a regression costs minutes rather than hours:
 #
 # | | |
 # |---|---|
-# | `ram ...` on every log line | you can see the slope yourself |
-# | **LeakWatch** | samples the slope early, and if the session could not finish what it planned, stops in the first few minutes |
-# | **MemoryGuard** | backstop at 85 % of the limit: saves a checkpoint, prints the phase, exits 0 so the notebook still commits |
+# | `ram ...` on every log line | you can read the slope yourself |
+# | **LeakWatch** | samples the slope early and stops in the first few minutes if the session could not finish what it planned |
+# | **MemoryGuard** | backstop at 85 % of the limit: saves a checkpoint, names the phase, exits 0 so the notebook still commits |
 #
-# `pin_memory: false` was the first attempt and it **did not help** -- the growth was
-# bit-identical with and without it (cgroup 6.4 -> 7.9 GiB over the same 100 steps, both
-# runs). That leaves AMP, DataParallel and the dataloader workers, and guessing at those
-# one eleven-hour run at a time would cost a week of quota.
-#
-# ## Finding it in fifteen minutes instead: `10_memory_bisect.py`
-#
-# Set `BISECT = True` in the cell below and run the notebook. It runs the real training
-# loop five times over -- baseline, no AMP, no DataParallel, no workers, and no AMP with
-# no DataParallel -- measuring the memory slope of each over a short window, then prints a
-# table. **The configuration that comes out flat names the culprit.** Nothing is trained
-# and nothing is saved.
-#
-# When the table comes back, put the winning switch in `configs/base.yaml` (or pass it as
-# `--set`), set `BISECT = False`, and train normally.
+# To re-run the bisect, set `BISECT = True` below.
 
 # %%
 CONFIG = "configs/paper.yaml"
