@@ -128,6 +128,52 @@ def test_causal_mode_builds_and_runs() -> None:
     assert out["est"].shape == (1, model.n_slots, 8000)
 
 
+def test_count_head_cannot_die_the_way_the_first_one_did() -> None:
+    """The measured failure: 128 of 128 hidden units negative for every input.
+
+    After 38 epochs the original head had every fc1 unit below zero, ReLU zeroed the
+    layer, fc2 emitted only its bias, and cross-entropy sat at ln(5) with accuracy at
+    chance -- with no gradient path back to recover through.
+
+    LayerNorm after fc1 subtracts the mean across the hidden dimension, so a uniform
+    negative shift -- what a single large early step produces -- is removed rather than
+    saturating anything, and GELU then always sees O(1) inputs. This drives the head into
+    the exact state that killed the old one and asserts it still varies and still learns.
+    """
+    import torch.nn.functional as F
+
+    from csnet.model import CountHead
+
+    torch.manual_seed(0)
+    head = CountHead(skip=64, hidden=64, n_classes=5, dropout=0.1)
+    feat = torch.randn(16, 64, 200) * 8.0          # TCN skip sums are not unit scale
+    labels = torch.randint(0, 5, (16,))
+
+    with torch.no_grad():                           # the bad early step
+        head.fc1.bias.fill_(-100.0)
+    head.train()
+    logits = head(feat)
+    F.cross_entropy(logits, labels).backward()
+
+    spread = float(logits.std(dim=0).mean().detach())
+    assert spread > 1e-4, f"logits must still vary between samples, got {spread}"
+    for name, param in head.named_parameters():
+        assert param.grad is not None, f"{name} received no gradient"
+        assert float(param.grad.abs().sum()) > 0.0, f"{name} gradient is identically zero"
+
+
+def test_count_head_output_varies_with_its_input() -> None:
+    """A head that ignores its input cannot count, however well it is trained."""
+    from csnet.model import CountHead
+
+    torch.manual_seed(1)
+    head = CountHead(skip=64, hidden=64, n_classes=5, dropout=0.0).eval()
+    with torch.no_grad():
+        quiet = head(torch.randn(8, 64, 200) * 0.1)
+        loud = head(torch.randn(8, 64, 200) * 5.0)
+    assert float((loud.mean(0) - quiet.mean(0)).abs().max()) > 1e-3,         "the head returns the same logits for very different features"
+
+
 CHECKS = {name: fn for name, fn in sorted(globals().items()) if name.startswith("test_")}
 
 if __name__ == "__main__":

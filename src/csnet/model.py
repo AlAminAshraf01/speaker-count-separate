@@ -170,13 +170,32 @@ class TCN(nn.Module):
 # --------------------------------------------------------------------------- heads
 
 class CountHead(nn.Module):
-    """Statistics-pooled classifier over the shared TCN features."""
+    """Statistics-pooled classifier over the shared TCN features.
+
+    The first version of this head used ``F.relu(fc1(pooled))`` on unnormalised pooled
+    statistics, and it died: after 38 epochs every one of its 128 hidden units was negative
+    for every input, so ReLU zeroed the layer, ``fc2`` emitted only its bias, and that bias
+    settled on the class marginal. Cross-entropy pinned at ln(5) = 1.609 and accuracy at
+    chance for 34 epochs, with no gradient path back to recover through.
+
+    Two changes make that failure unreachable rather than unlikely:
+
+    * **LayerNorm on the pooled statistics.** They are means and standard deviations of the
+      TCN skip sum, whose scale is set by the separation objective and is nobody's
+      responsibility. Normalising means one large early step -- and the early steps are
+      large, the loss starts near 64 -- cannot push every unit below zero at once.
+    * **GELU instead of ReLU.** GELU has a non-zero gradient for negative inputs, so a unit
+      that does drift negative still receives gradient and can come back. A dead GELU unit
+      does not exist.
+    """
 
     def __init__(self, skip: int, hidden: int, n_classes: int, dropout: float) -> None:
         super().__init__()
         self.proj = nn.Conv1d(skip, hidden, 1)
         self.act = nn.PReLU()
+        self.pool_norm = nn.LayerNorm(2 * hidden)
         self.fc1 = nn.Linear(2 * hidden, hidden)
+        self.hidden_norm = nn.LayerNorm(hidden)
         self.drop = nn.Dropout(dropout)
         self.fc2 = nn.Linear(hidden, n_classes)
 
@@ -184,7 +203,8 @@ class CountHead(nn.Module):
         """feat: (B, Sc, T) -> logits (B, n_classes)."""
         h = self.act(self.proj(feat))
         pooled = torch.cat([h.mean(dim=2), h.std(dim=2, unbiased=False)], dim=1)
-        return self.fc2(self.drop(F.relu(self.fc1(pooled))))
+        hidden = F.gelu(self.hidden_norm(self.fc1(self.pool_norm(pooled))))
+        return self.fc2(self.drop(hidden))
 
 
 # --------------------------------------------------------------------------- network
@@ -265,6 +285,17 @@ class CountSepNet(nn.Module):
             out["enc"] = enc
             out["feat"] = feat
         return out
+
+    def reset_count_head(self) -> None:
+        """Re-initialise the counting head, leaving the separator untouched.
+
+        Needed when resuming from a checkpoint whose head is dead: its weights are a local
+        optimum with no gradient out of it, so loading them and training longer changes
+        nothing. The separator in that same checkpoint is worth keeping.
+        """
+        fresh = CountHead(self.cfg.skip, self.cfg.count_hidden, self.cfg.n_classes,
+                          self.cfg.count_dropout)
+        self.count_head.load_state_dict(fresh.state_dict())
 
     # -- introspection -----------------------------------------------------
     def count_params(self, trainable_only: bool = True) -> int:

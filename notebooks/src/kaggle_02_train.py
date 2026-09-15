@@ -108,27 +108,51 @@ print("\ncheckpoints visible from a previous session:", previous or "none (first
 #
 # ## Budget, re-measured
 #
-# At **1140 ms/step**, 1000 steps plus validation is about **21 minutes an epoch**, so an
-# 11-hour session buys roughly **31 epochs** rather than 21.
+# At **1045 ms/step**, 1000 steps plus validation is about **19 minutes an epoch**, so an
+# 11-hour session buys roughly **37 epochs**. 40 epochs fits in two sessions comfortably.
 #
-# | EPOCHS | sessions | GPU-h |
-# |---|---|---|
-# | 40 | 2 | ~15 |
-# | 60 | 2 | ~22 |
+# ## The counting head collapsed, and what was done about it
 #
-# 40 stays the default. State it in the report as a budget decision.
+# After 38 epochs, separation was working -- validation SI-SDR went from **-11.35 to
+# +0.50 dB** -- and the counting head had not moved at all: cross-entropy pinned at 1.611
+# where ln(5) is 1.6094, accuracy at 0.200 where chance is 0.200, unchanged since step 2900.
 #
-# ## If memory ever climbs again
+# `scripts/11_inspect_count_head.py` read the answer straight off the checkpoint:
 #
-# Three things watch for it, so a regression costs minutes rather than hours:
-#
-# | | |
+# | measurement | value |
 # |---|---|
-# | `ram ...` on every log line | you can read the slope yourself |
-# | **LeakWatch** | samples the slope early and stops in the first few minutes if the session could not finish what it planned |
-# | **MemoryGuard** | backstop at 85 % of the limit: saves a checkpoint, names the phase, exits 0 so the notebook still commits |
+# | fc1 units never active | **128 of 128** |
+# | post-ReLU values that are zero | **100 %** |
+# | logit variation across samples | **0.0000** |
+# | pooled feature variation | 0.4144 |
 #
-# To re-run the bisect, set `BISECT = True` below.
+# Every hidden unit was negative for every input, so ReLU zeroed the layer and `fc2` could
+# only emit its bias -- which settles on the class marginal, uniform for a balanced set,
+# which *is* ln(5). The features feeding it varied perfectly well, so nothing upstream was
+# wrong. And a dead ReLU receives no gradient, so it could never have recovered: all 96
+# test samples were predicted `N=3`, the largest element of the bias vector.
+#
+# The head now has **LayerNorm on the pooled statistics, LayerNorm after `fc1`, and GELU**
+# instead of ReLU. The LayerNorm after `fc1` subtracts the mean across the hidden
+# dimension, so a uniform negative shift -- which is what one large early step produces,
+# and the early steps are large because the loss starts near 64 -- is removed rather than
+# saturating anything. A test drives the new head into the exact state that killed the old
+# one and asserts it still varies and still receives gradient.
+#
+# Two things also changed so this cannot cost thirteen hours again:
+#
+# * the trainer **warns** if counting accuracy sits at chance for four epochs, naming the
+#   inspector to run;
+# * `--reset_count_head` re-initialises the head on resume while keeping the separator,
+#   because a collapsed head's weights are a local optimum with no gradient out of them.
+#
+# ## Recovering from here
+#
+# The 13.5 hours of separator training are worth keeping; only the head needs redoing.
+# Set `RECOVER = True` in the cell below: it resumes from your checkpoint, re-initialises
+# the head, freezes the separator, and trains the counting head alone -- which is Gate 6 of
+# the plan, and takes about two hours rather than eleven because no separation gradients
+# are computed.
 
 # %%
 CONFIG = "configs/paper.yaml"
@@ -158,6 +182,7 @@ run(f"python scripts/04_train.py --config {CONFIG}"
 # `last.pt` in any attached dataset, otherwise start fresh.
 
 # %%
+RECOVER = False      # True: keep the separator, re-init the counting head, train it alone
 BISECT = False       # True: spend ~15 min finding which component leaks, and train nothing
 
 if BISECT:
@@ -165,7 +190,26 @@ if BISECT:
         f" --config {CONFIG} --set train.batch_size={BATCH_SIZE}")
 
 # %%
-if not BISECT:
+if BISECT:
+    pass
+elif RECOVER:
+    # Gate 6: the separator is frozen, so only the counting head learns. Its loss is the
+    # only one left, which is also the cleanest test of whether the features can support
+    # counting at all.
+    run(f"python scripts/04_train.py"
+        f" --config {CONFIG}"
+        f" --store {STORE}"
+        f" --recipes_dev {RECIPES_DEV}"
+        f" --ckpt_dir /kaggle/working/ckpt_count"
+        f" --resume auto --reset_count_head"
+        f" --time_budget_h {TIME_BUDGET_H}"
+        f" --best_metric count_acc"
+        f" --set train.epochs=12"
+        f" train.batch_size={BATCH_SIZE}"
+        f" train.steps_per_epoch={STEPS_PER_EPOCH}"
+        f" train.freeze_separator=True"
+        f" loss.w_sep=0.0 loss.w_sil=0.0 loss.w_noise=0.0")
+else:
     run(f"python scripts/04_train.py"
         f" --config {CONFIG}"
         f" --store {STORE}"
@@ -177,7 +221,7 @@ if not BISECT:
         f" --set train.epochs={EPOCHS}"
         f" train.batch_size={BATCH_SIZE}"
         f" train.steps_per_epoch={STEPS_PER_EPOCH}")
-else:
+if BISECT:
     print("BISECT is True -- skipping training. Set it back to False once the table")
     print("above names the component to switch off.")
 

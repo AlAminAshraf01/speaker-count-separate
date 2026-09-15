@@ -147,7 +147,11 @@ def load_checkpoint(path: str, *, model: Any = None, optimizer: Any = None,
         state = torch.load(path, map_location=map_location)
 
     if model is not None and state.get("model") is not None:
-        unwrap(model).load_state_dict(state["model"], strict=strict)
+        report = unwrap(model).load_state_dict(state["model"], strict=strict)
+        # A non-strict load that silently drops half a network is how a "resumed" run
+        # quietly starts from scratch. Hand the caller the difference so it can say so.
+        state["_missing_keys"] = list(getattr(report, "missing_keys", []) or [])
+        state["_unexpected_keys"] = list(getattr(report, "unexpected_keys", []) or [])
     if optimizer is not None and state.get("optimizer") is not None:
         optimizer.load_state_dict(state["optimizer"])
     if scheduler is not None and state.get("scheduler") is not None:

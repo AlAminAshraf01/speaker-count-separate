@@ -59,6 +59,12 @@ def main() -> int:
     ap.add_argument("--resume", default="auto", help="auto | none | /path/to/last.pt")
     ap.add_argument("--time_budget_h", type=float, default=None)
     ap.add_argument("--device", default="auto")
+    ap.add_argument("--reset_count_head", action="store_true",
+                    help="re-initialise the counting head after resuming, "
+                         "keeping the separator. Use when a head has "
+                         "collapsed: its weights are a local optimum with no "
+                         "gradient out of it, so training longer cannot move "
+                         "them.")
     ap.add_argument("--mem_guard_frac", type=float, default=0.85,
                     help="stop cleanly at this share of the container memory limit "
                          "(0 disables). A SIGKILL saves nothing; this saves a checkpoint.")
@@ -72,7 +78,7 @@ def main() -> int:
 
     from csnet.checkpoint import (TimeBudget, find_resume, kaggle_resume_instructions,
                                   keep_last_k, load_checkpoint, print_resume_banner,
-                                  save_checkpoint)
+                                  save_checkpoint, unwrap)
     from csnet.config import cfg_to_dict, load_cfg, save_cfg, seg_len
     from csnet.datasets import DynamicMixDataset, FrozenMixDataset, build_loader
     from csnet.engine import build_optimizer, evaluate, measure_throughput, train_one_epoch
@@ -183,13 +189,43 @@ def main() -> int:
         resume_path = None
     if resume_path:
         print(f"\nresuming from {resume_path}")
-        state = load_checkpoint(resume_path, model=model, optimizer=optimizer,
-                                scheduler=scheduler, scaler=scaler, map_location=str(device))
+        try:
+            state = load_checkpoint(resume_path, model=model, optimizer=optimizer,
+                                    scheduler=scheduler, scaler=scaler,
+                                    map_location=str(device))
+        except (RuntimeError, ValueError) as exc:
+            # The architecture moved on. Throwing away a trained separator over a changed
+            # head would be absurd, so load what still matches -- but say exactly what did
+            # not, because a quiet partial load is how a "resumed" run starts from scratch
+            # without anyone noticing.
+            print(f"  checkpoint predates the current model: {str(exc).splitlines()[0]}")
+            state = load_checkpoint(resume_path, model=model, map_location=str(device),
+                                    strict=False)
+            for label, keys in (("missing from the checkpoint",
+                                 state.get("_missing_keys", [])),
+                                ("no longer in the model",
+                                 state.get("_unexpected_keys", []))):
+                if keys:
+                    shown = ", ".join(keys[:6]) + (" ..." if len(keys) > 6 else "")
+                    print(f"  {len(keys)} parameter(s) {label}: {shown}")
+            print("  Every weight that still exists was restored. Optimizer, scheduler and")
+            print("  AMP-scaler state were NOT: they are indexed by the parameter list, and")
+            print("  that list changed. Adam's moments restart; the weights are intact.")
         start_epoch = int(state.get("epoch", 0))
         global_step = int(state.get("global_step", 0))
         best_metric = float(state.get("best_metric", float("-inf")))
         history = list(state.get("history", []))
         consumed_h = float(state.get("wall_h", 0.0))
+        was = (state.get("extra") or {}).get("best_metric_name")
+        if was and was != args.best_metric:
+            # "best" is a number on one metric's scale. Carrying a P-SI-SNR of -21.8 into a
+            # run scored on accuracy would make the first epoch look like a record.
+            print(f"  best_metric changed ({was} -> {args.best_metric}); "
+                  f"the stored best is on the old scale, so it starts over")
+            best_metric = float("-inf")
+        if args.reset_count_head:
+            unwrap(model).reset_count_head()
+            print("  counting head RE-INITIALISED; separator kept")
         print(f"  epoch {start_epoch}, step {global_step}, best {args.best_metric} "
               f"{best_metric:.3f}, {consumed_h:.2f} h already spent")
         if resume_path.startswith("/kaggle/input"):
@@ -237,7 +273,8 @@ def main() -> int:
         save_checkpoint(path, model=model, optimizer=optimizer, scheduler=scheduler,
                         scaler=scaler, epoch=epoch, global_step=step,
                         best_metric=best_metric, history=history,
-                        cfg_dict=cfg_to_dict(cfg), wall_h=budget.total_h())
+                        cfg_dict=cfg_to_dict(cfg), wall_h=budget.total_h(),
+                        extra={"best_metric_name": args.best_metric})
 
     mem_guard = MemoryGuard(frac=float(args.mem_guard_frac)) if args.mem_guard_frac > 0 else None
     leak_watch = LeakWatch(mem_guard, horizon_steps) if mem_guard else None
@@ -312,6 +349,22 @@ def main() -> int:
             log_writer.writerow(row)
             log_handle.flush()
             json_dump_atomic(history, os.path.join(out_dir, "history.json"))
+
+            # A counting head that has collapsed reports exactly chance forever,
+            # and separation keeps improving alongside it, so the run looks
+            # healthy for as long as you let it. It cost thirteen hours once.
+            chance = 1.0 / max(1, int(cfg.model.n_classes))
+            acc_now = val_logs.get("count_acc", float("nan"))
+            recent = [h.get("val_count_acc") for h in history[-4:]]
+            recent = [a for a in recent if a is not None and a == a]
+            if (len(recent) >= 4 and acc_now == acc_now
+                    and max(recent) <= chance * 1.05):
+                print(f"  WARNING: counting accuracy has been at chance ({100 * chance:.0f} %)")
+                print("           for four epochs. A head that has collapsed reports exactly")
+                print("           this and never recovers, because a dead unit gets no")
+                print("           gradient. Check it before spending more hours:")
+                print("             python scripts/11_inspect_count_head.py --ckpt "
+                      f"{os.path.join(ckpt_dir, 'last.pt')} --store {store_root}")
 
             print(f"epoch {epoch + 1:3d}/{cfg.train.epochs} | "
                   f"train loss {train_logs.get('loss', float('nan')):7.3f} "
