@@ -7,10 +7,12 @@ level alone predicts the speaker count, because a LibriMix mixture of N sources 
 therefore asks it a question it has never been asked, and the counting head -- which pools
 mean and standard deviation over the whole time axis -- answers accordingly.
 
-That is not hypothetical. The gate-2 evaluation used to hand the official Libri2Mix test
-set to the model in single ten-second blocks and got **0 correct counts out of 300**, while
-the same model scored 52 % on our own three-second N=2 mixtures. Same model, same task,
-different input length.
+The gate-2 evaluation used to hand the official Libri2Mix test set to the model in single
+ten-second blocks. Windowing it properly did not rescue that number -- 0 correct counts out
+of 300 either way, against 52 % on our own three-second N=2 mixtures, so the transfer
+failure is per-source normalisation rather than length -- but "the model was asked a
+question it has never been asked" is not something to leave in place because fixing it
+happened not to help.
 
 So there is exactly one way to run this model on real audio, and it lives here rather than
 in a script: overlapping 3 s windows, each RMS-normalised, permutation-aligned to the

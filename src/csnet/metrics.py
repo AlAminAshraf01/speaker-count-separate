@@ -211,12 +211,18 @@ def summarise_per_n(records: Sequence[dict], n_list: Sequence[int] = N_LIST) -> 
         group = [r for r in records if int(r["n_true"]) == n]
         if not group:
             continue
-        correct = [r for r in group if int(r["n_pred"]) == n and r.get("si_sdri") is not None]
+        counted = [r for r in group if int(r["n_pred"]) == n]
+        # Count-correct and *measurable* are not the same set. A clean single-speaker
+        # mixture can be counted perfectly and still have no improvement to report,
+        # because the input already was the reference -- so the two are reported apart
+        # rather than letting `n_count_correct` quietly mean both.
+        correct = [r for r in counted if r.get("si_sdri") is not None]
         out[n] = {
             "n": len(group),
             "count_acc": float(np.mean([int(r["n_pred"]) == n for r in group])),
             "p_si_snr": float(np.mean([r["p_si_snr"] for r in group])),
-            "n_count_correct": len(correct),
+            "n_count_correct": len(counted),
+            "n_scored": len(correct),
             "si_sdri_count_correct": (float(np.mean([np.mean(r["si_sdri"]) for r in correct]))
                                       if correct else float("nan")),
             "input_si_sdr": (float(np.mean([r["input_si_sdr"] for r in group

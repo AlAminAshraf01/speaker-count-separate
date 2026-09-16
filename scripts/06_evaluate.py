@@ -34,12 +34,22 @@ def evaluate_official_libri2mix(model, libri_dir, split, device, limit, max_seco
                                 max_n_src):
     """Gate 2: the official, unmodified Libri2Mix test set at a known N = 2.
 
-    The audio is untouched; the *inference* is the project's own, which means overlapping
-    3-second RMS-normalised windows rather than one long block. That distinction is not
-    cosmetic. Handing the model a ten-second utterance in one piece scored **0 correct
-    counts out of 300** here while the same checkpoint scored 52 % on our own 3 s N=2
-    mixtures -- the model has never seen an input of any other length, and the counting
-    head pools statistics over the whole time axis.
+    The audio is untouched; the *inference* is the project's own -- overlapping 3-second
+    RMS-normalised windows rather than one long block, because the model has never seen an
+    input of any other length.
+
+    That change was worth making and it did **not** fix the counting. Both before and
+    after, this scores **0 correct out of 300** while the same checkpoint scores 52 % on
+    our own 3 s N=2 mixtures, so the gap is not input length. What is left is how the
+    mixtures are built: ours normalise every source to unit RMS and then jitter it by at
+    most +-5 dB -- that per-source normalisation is the count-leak mitigation -- while
+    LibriMix uses its own loudness target and a far wider spread, and its windows contain
+    real pauses where ours are screened for energy. The counting head learned to count
+    under our normalisation and does not transfer out of it.
+
+    So the histogram below is the point of this function as much as the decibels are: a
+    single saturated answer and a spread-out wrong one mean different things, and "0 %"
+    on its own says neither.
     """
     from csnet.audio import read_wav
     from csnet.constants import SR, n_to_class
@@ -52,7 +62,7 @@ def evaluate_official_libri2mix(model, libri_dir, split, device, limit, max_seco
     names = sorted(f for f in os.listdir(mix_dir) if f.lower().endswith(".wav"))[:limit]
     max_len = int(max_seconds * SR) if max_seconds else None
 
-    sisdri, correct, windows = [], [], []
+    sisdri, correct, windows, predicted = [], [], [], []
     for name in names:
         mix, _ = read_wav(os.path.join(mix_dir, name), sr=SR)
         sources = []
@@ -72,15 +82,21 @@ def evaluate_official_libri2mix(model, libri_dir, split, device, limit, max_seco
 
         result = separate_long(model, mix, device)
         correct.append(int(result["cls"] == n_to_class(2)))
+        predicted.append(int(result["cls"]))
         windows.append(result["n_windows"])
         sisdri.append(float(np.mean(
             matched_si_sdri(result["est"][:max_n_src], sources, mix, 2))))
 
     if not sisdri:
         return None
+    from csnet.constants import class_to_n
+
+    histogram = {int(class_to_n(c)): int(predicted.count(c))
+                 for c in sorted(set(predicted))}
     return {"n_files": len(sisdri), "si_sdri": float(np.mean(sisdri)),
             "si_sdri_std": float(np.std(sisdri)), "count_acc": float(np.mean(correct)),
-            "mean_windows": float(np.mean(windows)), "reference_asteroid": 14.76}
+            "mean_windows": float(np.mean(windows)), "predicted_counts": histogram,
+            "reference_asteroid": 14.76}
 
 
 def main() -> int:
@@ -204,9 +220,14 @@ def main() -> int:
     for n, stats in results["per_n"].items():
         per_n_rows.append([n, stats["n"], round(stats["count_acc"] * 100, 1),
                            round(stats["p_si_snr"], 2), stats["n_count_correct"],
+                           stats.get("n_scored", stats["n_count_correct"]),
                            round(stats["si_sdri_count_correct"], 2),
                            round(stats["input_si_sdr"], 2)])
-    per_n_header = ["N", "mixes", "count %", "P-SI-SNR", "n correct", "SI-SDRi(cc)", "input SI-SDR"]
+    # "n counted" and "n scored" differ only where the input already was the reference,
+    # which is N=1 and clean. Printing one number for both invites the reader to check
+    # count % x mixes against it, find a mismatch, and distrust the rest of the table.
+    per_n_header = ["N", "mixes", "count %", "P-SI-SNR", "n counted", "n scored",
+                    "SI-SDRi(cc)", "input SI-SDR"]
     print(format_table(per_n_rows, per_n_header))
     report["per_n"] = results["per_n"]
     report["overall"] = {k: results[k] for k in
@@ -310,6 +331,13 @@ def main() -> int:
             print(f"count accuracy : {official['count_acc'] * 100:.1f} % (should predict N=2)")
             print(f"inference      : {official['mean_windows']:.1f} windows per file of "
                   f"3 s at 50 % overlap -- the same input shape the model was trained on")
+            histogram = official.get("predicted_counts") or {}
+            if histogram:
+                # "0 % correct" is the same headline whether the model says N=1 every
+                # time or scatters uniformly, and those are completely different faults.
+                spread = "  ".join(f"N={n}: {c}" for n, c in sorted(histogram.items()))
+                print(f"it predicted   : {spread}   (the truth is N=2 for all "
+                      f"{official['n_files']})")
             report["official_libri2mix"] = official
 
     # ---------------------------------------------------------- markdown

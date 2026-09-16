@@ -302,10 +302,12 @@ Produces `eval_report.md`, which pastes straight into the report, plus `confusio
   input scores ~124 dB and "improvement" measures EPS, not the model. Averaging those in
   reported **-8.68 dB** where the honest figure over N=2..5 was **+1.2 dB**. Those sources
   are now excluded and counted.
-* **Gate 2's input length.** The model has only ever seen 3 s RMS-normalised crops. Gate 2
-  fed it whole ten-second utterances and scored **0 correct counts out of 300**, against
-  52 % on our own 3 s N=2 mixtures. It now uses `csnet.inference.separate_long`, the same
-  overlapping windows `08_infer.py` uses. The audio is untouched; only the windowing is.
+* **Gate 2's input length.** The model has only ever seen 3 s RMS-normalised crops and
+  gate 2 fed it whole ten-second utterances, so it now uses `csnet.inference.separate_long`
+  like `08_infer.py` does. Worth fixing, but it did **not** move the counting: 0 correct
+  out of 300 before and after, against 52 % on our own 3 s N=2 mixtures. The remaining gap
+  is per-source RMS normalisation -- the count-leak mitigation -- which LibriMix does not
+  use. Gate 2 now prints which count it gives instead of N=2.
 
 ### Gate 2 is the number that matters
 

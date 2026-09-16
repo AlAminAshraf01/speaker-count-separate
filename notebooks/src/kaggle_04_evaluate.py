@@ -149,11 +149,16 @@ else:
 #   excluded and counted; the line above the per-N table says how many. The first run of
 #   this notebook averaged them in and reported **-8.68 dB** where the honest figure over
 #   N=2..5 was **+1.2 dB**.
-# - **Gate 2 runs the project's own inference, not a single long block.** The model has
-#   only ever seen 3 s RMS-normalised crops. Feeding it whole ten-second utterances scored
-#   **0 correct counts out of 300** while the same checkpoint scored 52 % on our own 3 s
-#   N=2 mixtures. It now uses `csnet.inference.separate_long`, the same overlapping
-#   windows `08_infer.py` uses. The audio is still untouched; only the windowing changed.
+# - **The counting head does not transfer to the official test set at all.** It scores
+#   52 % on our own 3 s N=2 mixtures and **0 % on 300 official Libri2Mix N=2 files** --
+#   not "worse", never once right. Feeding it overlapping 3 s windows instead of one long
+#   block (`csnet.inference.separate_long`) did not change that, so input length is not
+#   the reason. What is left is how the mixtures are built: ours divide every source by
+#   its own RMS and then jitter by at most +-5 dB, which *is* the count-leak mitigation,
+#   while LibriMix uses its own loudness target with a much wider spread and leaves the
+#   natural pauses our crops are screened against. Report this as the result it is: the
+#   mitigation that makes our counting honest also makes it specific to our mixtures.
+#   The `it predicted` line under gate 2 shows which count it gives instead.
 # - Only the N=2 row on the official test set is comparable to the literature; our N>2
 #   mixtures are our own.
 # - `min`-mode mixtures are **fully overlapped**, so counting here is one global judgement

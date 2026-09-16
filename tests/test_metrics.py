@@ -233,6 +233,31 @@ def test_the_guard_is_wired_into_the_record_builder() -> None:
     assert min(records[1]["si_sdri"]) > 5.0, records[1]["si_sdri"]
 
 
+def test_counted_and_scored_are_reported_separately() -> None:
+    """`count % x mixes` must reconcile with a column, or the whole table looks wrong.
+
+    A clean single-speaker mixture can be counted perfectly and still have nothing to
+    score, so one number cannot mean both. Reporting only the scored count made N=1 read
+    "64 % of 300 correct" beside "122", which invites the reader to distrust the table.
+    """
+    from csnet.metrics import summarise_per_n
+
+    records = [
+        {"n_true": 1, "n_pred": 1, "p_si_snr": 8.0, "si_sdri": None,       # counted, not scored
+         "n_degenerate": 1, "input_si_sdr": 124.0},
+        {"n_true": 1, "n_pred": 1, "p_si_snr": 8.0, "si_sdri": [2.0],      # counted and scored
+         "n_degenerate": 0, "input_si_sdr": 12.0},
+        {"n_true": 1, "n_pred": 3, "p_si_snr": -9.0, "si_sdri": None,      # miscounted
+         "n_degenerate": 0, "input_si_sdr": 11.0},
+    ]
+    stats = summarise_per_n(records, [1])[1]
+    assert stats["n"] == 3
+    assert abs(stats["count_acc"] - 2 / 3) < 1e-9, stats["count_acc"]
+    assert stats["n_count_correct"] == 2, stats           # matches count_acc x n
+    assert stats["n_scored"] == 1, stats                  # only one had anything to score
+    assert abs(stats["si_sdri_count_correct"] - 2.0) < 1e-9
+
+
 CHECKS = {name: fn for name, fn in sorted(globals().items()) if name.startswith("test_")}
 
 if __name__ == "__main__":
