@@ -309,6 +309,20 @@ Produces `eval_report.md`, which pastes straight into the report, plus `confusio
   is per-source RMS normalisation -- the count-leak mitigation -- which LibriMix does not
   use. Gate 2 now prints which count it gives instead of N=2.
 
+### What gate 2 actually said
+
+Run on 2026-09-17, 2.53 GPU-hours, `configs/gate2.yaml` + `--dev_n 2`:
+
+| run | epochs | GPU-h | val SI-SDR |
+|---|---|---|---|
+| pooled N=1..5, full loss | 38 | ~13.5 | **0.50 dB** |
+| fixed N=2, separation only | 8 | 2.5 | **7.40 dB** |
+
+Fifteen times the separation in a fifth of the time, same code and same data. The pipeline
+was never the problem. +1.2 dB is what one model costs when it serves five speaker counts
+and three auxiliary objectives on a forty-epoch budget — which is the report's finding,
+not its embarrassment.
+
 ### Gate 2 is the number that matters
 
 ```

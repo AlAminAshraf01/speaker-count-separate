@@ -392,7 +392,11 @@ def main() -> int:
             acc_now = val_logs.get("count_acc", float("nan"))
             recent = [h.get("val_count_acc") for h in history[-4:]]
             recent = [a for a in recent if a is not None and a == a]
-            if (len(recent) >= 4 and acc_now == acc_now
+            # A run with w_count at zero is not training the head, so of course it sits
+            # at chance. Warning about it there teaches the reader to ignore the warning,
+            # which is exactly what it must not do when the head really has collapsed.
+            counting_is_trained = float(cfg.loss.w_count) > 0.0
+            if (counting_is_trained and len(recent) >= 4 and acc_now == acc_now
                     and max(recent) <= chance * 1.05):
                 print(f"  WARNING: counting accuracy has been at chance ({100 * chance:.0f} %)")
                 print("           for four epochs. A head that has collapsed reports exactly")
