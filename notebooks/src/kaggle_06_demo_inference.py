@@ -33,9 +33,18 @@ import sys
 sys.path.insert(0, os.path.join(REPO, "scripts"))
 from _common import autodetect_ckpt, autodetect_store
 
-# By recorded step, so the 30-second dry run cannot win on alphabetical order.
+# Which run to demo. Empty picks the furthest-along checkpoint, which is the pooled model
+# -- the right one here, because this notebook's whole claim is "unknown number of talkers
+# in, one track per talker out" and only the pooled model has a counting head that was
+# trained. The gate-2 control cannot answer "how many", so demoing it would misrepresent
+# the system.
+#   ""            the main pooled N=1..5 model
+#   "ckpt_count"  the same thing, pinned
+#   "ckpt_gate2"  the fixed-N=2 control -- separation only, counting is untrained
+ONLY = ""
+
 print("checkpoints visible:")
-CKPT = autodetect_ckpt()
+CKPT = autodetect_ckpt(contains=ONLY or None)
 print("\ncheckpoint:", CKPT)
 assert CKPT, "attach the 02_train notebook output"
 

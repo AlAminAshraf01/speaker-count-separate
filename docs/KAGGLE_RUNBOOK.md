@@ -318,10 +318,25 @@ Run on 2026-09-17, 2.53 GPU-hours, `configs/gate2.yaml` + `--dev_n 2`:
 | pooled N=1..5, full loss | 38 | ~13.5 | **0.50 dB** |
 | fixed N=2, separation only | 8 | 2.5 | **7.40 dB** |
 
-Fifteen times the separation in a fifth of the time, same code and same data. The pipeline
-was never the problem. +1.2 dB is what one model costs when it serves five speaker counts
-and three auxiliary objectives on a forty-epoch budget — which is the report's finding,
-not its embarrassment.
+Fifteen times the separation in a fifth of the time, same code and same data. Evaluated on
+the **official Libri2Mix test set** — the only literature-comparable number in the project
+— the same two checkpoints give:
+
+| model | official Libri2Mix N=2 SI-SDRi |
+|---|---|
+| pooled N=1..5, 38 epochs, full loss | 0.08 dB |
+| fixed N=2, 8 epochs, separation only | **5.49 dB** |
+| Conv-TasNet (asteroid), 200 epochs, train-360 | 14.76 dB |
+
+The pipeline was never the problem. +1.2 dB is what one model costs when it serves five
+speaker counts and three auxiliary objectives on a forty-epoch budget — which is the
+report's finding, not its embarrassment. The remaining 9.3 dB to the published figure is
+budget: 8 epochs against 200, and train-100 against train-360.
+
+Note the gate-2 model's counting row is meaningless by construction (`w_count: 0`), so its
+per-N SI-SDRi on our own test set is only defined where its untrained head happens to
+guess right. Use the official row for it, and the pooled model for everything about
+counting.
 
 ### Gate 2 is the number that matters
 

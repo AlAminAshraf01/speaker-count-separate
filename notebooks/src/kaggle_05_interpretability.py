@@ -43,9 +43,17 @@ STORE = autodetect_store()
 hits = (glob.glob("/kaggle/input/**/recipes_test.csv", recursive=True)
         + glob.glob(os.path.join(REPO, "data", "recipes_test.csv")))
 RECIPES_TEST = hits[0] if hits else None
-# By recorded step, so the 30-second dry run cannot win on alphabetical order.
+# Which run to analyse. Ranked by recorded global step when empty, which picks the pooled
+# model over the short gate-2 control -- and that is the one you want here, because the
+# whole argument is mask geometry *versus N* and the gate-2 model only ever saw N=2 with
+# an untrained counting head. Name it explicitly if both outputs are attached.
+#   ""            the main pooled N=1..5 model
+#   "ckpt_count"  the same thing, pinned
+#   "ckpt_gate2"  the fixed-N=2 control
+ONLY = ""
+
 print("checkpoints visible:")
-CKPT = autodetect_ckpt()
+CKPT = autodetect_ckpt(contains=ONLY or None)
 
 print("\nstore     :", STORE)
 print("checkpoint:", CKPT)
