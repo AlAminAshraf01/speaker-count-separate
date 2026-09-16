@@ -69,6 +69,16 @@ def best_permutation(est: np.ndarray, refs: np.ndarray, n_src: int | None = None
     return np.asarray(rows), np.asarray(cols)
 
 
+#: Above this input SI-SDR the mixture *is* the reference, so "improvement" is undefined.
+#: A clean single-speaker mixture is the case that matters: ``mix == s1`` exactly, so
+#: ``si_sdr(mix, s1)`` is limited only by EPS and lands near 124 dB for a 3 s unit-RMS
+#: signal. Subtracting that from any real estimate gives about -114 dB, and averaging it
+#: into a headline turned a true +1.2 dB into a reported -8.68 dB. A genuinely noisy
+#: single-speaker mixture tops out near 21 dB here, so the threshold separates them
+#: cleanly with two orders of magnitude to spare.
+DEGENERATE_INPUT_DB: float = 40.0
+
+
 def matched_si_sdri(est: np.ndarray, refs: np.ndarray, mix: np.ndarray,
                     n_src: int) -> np.ndarray:
     """PIT-matched per-source SI-SDR improvement. Matching happens at eval time too."""
@@ -78,6 +88,29 @@ def matched_si_sdri(est: np.ndarray, refs: np.ndarray, mix: np.ndarray,
     for k, (r, c) in enumerate(zip(rows, cols)):
         out[k] = si_sdr(est[c], refs[r]) - si_sdr(mix, refs[r])
     return out
+
+
+def usable_si_sdri(est: np.ndarray, refs: np.ndarray, mix: np.ndarray, n_src: int,
+                   max_input_db: float = DEGENERATE_INPUT_DB
+                   ) -> tuple[np.ndarray, int]:
+    """PIT-matched SI-SDRi with sources the mixture already equals left out.
+
+    Returns ``(improvements, n_dropped)``. You cannot improve on an input that is already
+    the target, and reporting a large negative number for trying is not a measurement of
+    anything -- it is a measurement of EPS. Dropping those sources is the standard
+    treatment; counting them is what makes it honest.
+    """
+    est, refs, mix = _np(est), _np(refs), _np(mix)
+    rows, cols = best_permutation(est, refs, n_src)
+    keep: list[float] = []
+    dropped = 0
+    for r, c in zip(rows, cols):
+        baseline = float(si_sdr(mix, refs[r]))
+        if baseline > max_input_db:
+            dropped += 1
+            continue
+        keep.append(float(si_sdr(est[c], refs[r])) - baseline)
+    return np.asarray(keep, dtype=np.float64), dropped
 
 
 def p_si_snr(est_slots: np.ndarray, refs: np.ndarray, n_true: int, n_pred: int,

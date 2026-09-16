@@ -296,6 +296,17 @@ one run.
 
 Produces `eval_report.md`, which pastes straight into the report, plus `confusion.png`.
 
+### Two numbers this notebook used to get wrong
+
+* **SI-SDRi at N=1.** A clean single-speaker mixture has `mix == s1`, so the unprocessed
+  input scores ~124 dB and "improvement" measures EPS, not the model. Averaging those in
+  reported **-8.68 dB** where the honest figure over N=2..5 was **+1.2 dB**. Those sources
+  are now excluded and counted.
+* **Gate 2's input length.** The model has only ever seen 3 s RMS-normalised crops. Gate 2
+  fed it whole ten-second utterances and scored **0 correct counts out of 300**, against
+  52 % on our own 3 s N=2 mixtures. It now uses `csnet.inference.separate_long`, the same
+  overlapping windows `08_infer.py` uses. The audio is untouched; only the windowing is.
+
 ### Gate 2 is the number that matters
 
 ```
@@ -352,6 +363,10 @@ with music underneath.
 | `git clone` fails | Internet is off | **Settings → Internet → On**, or use Route B in §0.1 |
 | Disk full at ~20 GB | store + checkpoints + renders | drop `--render_wav`, or `--set train.keep_last_k=1` |
 | Counting is stuck at one class | count term too weak, or too early | raise `loss.w_count` to 1.0; check the loss is falling at all |
+| Counting head pinned at ln(5) with chance accuracy | dead ReLU in the head | `scripts/11_inspect_count_head.py` names which of four causes it is |
+| Separator stuck near +1 dB SI-SDRi | see §9.5 | `scripts/13_inspect_separator.py` — dead mask, collapsed scale, or just inaccurate |
+| Gate 2 counts 0 % correct but our own test set does not | the model was fed whole utterances, not 3 s windows | fixed: gate 2 now uses `csnet.inference.separate_long` |
+| A large negative SI-SDRi at N=1 | clean single-speaker mixtures, where `mix == s1` | fixed: those sources are excluded and counted |
 | `nan` in the loss | LR too high, or fp16 overflow | `--set train.lr=5e-4`, or `train.amp=False` to confirm the cause |
 | `PREFLIGHT: STOP` | one of the rows above it | read the `->` line under that row; nothing has been spent |
 | Cells run old code after a push | the `.ipynb` was not re-imported | preflight says `cells STALE`; **File → Import Notebook** again |

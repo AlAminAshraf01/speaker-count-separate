@@ -124,11 +124,17 @@ if official:
         print("Above the published baseline. Check the evaluation is not accidentally "
               "oracle-informed before celebrating.")
     else:
-        print("BELOW TARGET. Before touching the architecture, check in this order:")
-        print("  1. is the assignment actually permuting?  python -m csnet.losses")
-        print("  2. are the sources really distinct speakers?  scripts/03_count_leak_probe.py")
-        print("  3. did training converge, or did it stop on the time budget?  train_log.csv")
-        print("  4. only then: more epochs, or a larger config")
+        print("BELOW TARGET. Already ruled out, so do not spend quota re-checking them:")
+        print("  - the loss       python -m csnet.losses passes all four invariants")
+        print("  - the model      one fixed batch reaches 19.7 dB with this exact loss")
+        print("                   in 250 steps, and 28.4 dB with the separation term alone")
+        print("  - the data       all five speaker-disjointness audits are zero")
+        print()
+        print("  Still open, cheapest first:")
+        print("  1. is the pooled N=1..5 task the difficulty, rather than the pipeline?")
+        print("     Set GATE2 = True in notebook 02. Fixed N=2, ~2.5 GPU-h, decisive.")
+        print("  2. is part of the mask head dead, the way the counting head was?")
+        print("     python scripts/13_inspect_separator.py --ckpt <this checkpoint>")
 else:
     print("gate 2 not run - attach the libri2mix-8khz-min dataset to enable it")
 
@@ -137,6 +143,17 @@ else:
 #
 # Copy these into the limitations section, as prose:
 #
+# - **SI-SDRi is not reported for a clean single-speaker mixture.** There `mix == s1`
+#   exactly, so the unprocessed input already scores about 124 dB and "improvement" is a
+#   measurement of the epsilon in the denominator, not of the model. Those sources are
+#   excluded and counted; the line above the per-N table says how many. The first run of
+#   this notebook averaged them in and reported **-8.68 dB** where the honest figure over
+#   N=2..5 was **+1.2 dB**.
+# - **Gate 2 runs the project's own inference, not a single long block.** The model has
+#   only ever seen 3 s RMS-normalised crops. Feeding it whole ten-second utterances scored
+#   **0 correct counts out of 300** while the same checkpoint scored 52 % on our own 3 s
+#   N=2 mixtures. It now uses `csnet.inference.separate_long`, the same overlapping
+#   windows `08_infer.py` uses. The audio is still untouched; only the windowing changed.
 # - Only the N=2 row on the official test set is comparable to the literature; our N>2
 #   mixtures are our own.
 # - `min`-mode mixtures are **fully overlapped**, so counting here is one global judgement

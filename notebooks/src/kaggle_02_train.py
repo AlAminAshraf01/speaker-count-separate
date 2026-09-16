@@ -158,6 +158,40 @@ print("\ncheckpoints visible from a previous session:", previous or "none (first
 # empty, so the run trains nothing and exits 0. The trainer now refuses that instead of
 # pretending it worked.
 
+# ## Gate 2 - the control that was never run
+#
+# The full evaluation came back with the counter working and the separator not:
+#
+# | | ours | floor | published |
+# |---|---|---|---|
+# | counting accuracy | **44.9 %** | 35.0 % naive, 20 % chance | - |
+# | SI-SDRi, N=2..5 | **+1.2 dB** | 0 dB (the mixture) | 14.76 dB at N=2 |
+# | IRM/IBM oracle | - | - | 10.6-12.8 dB |
+#
+# Before changing the architecture, it is worth knowing that it is not broken. A single
+# fixed batch of four two-speaker mixtures, 250 steps, nothing else changed:
+#
+# | objective | SI-SDR reached |
+# |---|---|
+# | separation term alone | **28.36 dB** |
+# | the full production loss | **19.66 dB** |
+#
+# So the model, the loss and the optimiser are all capable -- no bug. What the A/B also
+# shows is that the auxiliary objectives cost about **8.7 dB of progress at matched step
+# count**: the silence term is driven to 0.000 within a hundred steps, and separation is
+# nine decibels behind for all of them. It is a real tax, and it is not the whole story,
+# because 38,800 steps of the real run reached 0.19 dB on its own *training* data.
+#
+# What is left is the thing the design document said to check first and the project never
+# did: **is +1.2 dB the pipeline's ceiling, or the pooled N=1..5 task's?** `GATE2 = True`
+# answers it in about 2.5 GPU-hours -- two speakers in every mixture, no counting term, no
+# silence term, which is the standard fixed-N setup the 14.76 dB was measured under.
+#
+# * **8-12 dB** - the pipeline is sound and the five-count task plus a forty-epoch budget
+#   is the entire explanation. That is a finding and a defensible one for the report.
+# * **still near 1 dB** - something deeper is wrong; run
+#   `scripts/13_inspect_separator.py` on the checkpoint next.
+
 # %%
 CONFIG = "configs/paper.yaml"
 EPOCHS = 40                # measured: ~19 min/epoch, so ~37 epochs per 11 h session
@@ -169,10 +203,13 @@ STEPS_PER_EPOCH = 1000
 # that reads them, because CKPT_DIR depends on RECOVER: the recovery run writes to its own
 # directory, and a progress plot pointed at the other one silently shows nothing.
 RECOVER = False          # True: keep the separator, re-init the counting head, train it alone
+GATE2 = False            # True: the fixed-N=2 control run, ~2.5 h -- see "Gate 2" below
 BISECT = False           # True: spend ~15 min finding which component leaks, and train nothing
 EXTRA_EPOCHS = 12        # RECOVER only: this many MORE epochs, counted from the checkpoint
 
-CKPT_DIR = "/kaggle/working/ckpt_count" if RECOVER else "/kaggle/working/ckpt"
+CKPT_DIR = ("/kaggle/working/ckpt_gate2" if GATE2 else
+            "/kaggle/working/ckpt_count" if RECOVER else
+            "/kaggle/working/ckpt")
 print("writing to :", CKPT_DIR)
 
 # %% [markdown]
@@ -188,9 +225,10 @@ print("writing to :", CKPT_DIR)
 
 # %%
 run(f"python scripts/12_preflight.py --for {'recover' if RECOVER else 'train'}"
-    f" --config {CONFIG} --store {STORE} --recipes_dev {RECIPES_DEV}"
+    f" --config {'configs/gate2.yaml' if GATE2 else CONFIG} --store {STORE}"
+    f" --recipes_dev {RECIPES_DEV}"
     f" --ckpt_dir {CKPT_DIR} --time_budget_h {TIME_BUDGET_H}"
-    + (f" --extra_epochs {EXTRA_EPOCHS}" if RECOVER else f" --epochs {EPOCHS}")
+    + (f" --extra_epochs {EXTRA_EPOCHS}" if RECOVER else "" if GATE2 else f" --epochs {EPOCHS}")
     + f" --cells_src {CELLS_SRC} --cells_sha {CELLS_SHA}"
     f" --set train.batch_size={BATCH_SIZE} train.steps_per_epoch={STEPS_PER_EPOCH}")
 
@@ -220,6 +258,22 @@ run(f"python scripts/04_train.py --config {CONFIG}"
 if BISECT:
     run(f"python scripts/10_memory_bisect.py --store {STORE}"
         f" --config {CONFIG} --set train.batch_size={BATCH_SIZE}")
+elif GATE2:
+    # The control the design document asks for and the project skipped. Two speakers in
+    # every mixture, no counting term, no silence term: the standard fixed-N setup that
+    # the published 14.76 dB was measured under. `neg_loss` is the right metric to track
+    # here because with w_count and w_sil at zero the loss *is* negative SI-SDR.
+    run(f"python scripts/04_train.py"
+        f" --config configs/gate2.yaml"
+        f" --store {STORE}"
+        f" --recipes_dev {RECIPES_DEV}"
+        f" --ckpt_dir {CKPT_DIR}"
+        f" --dev_n 2"
+        f" --resume auto"
+        f" --time_budget_h {TIME_BUDGET_H}"
+        f" --best_metric neg_loss"
+        f" --set train.batch_size={BATCH_SIZE}"
+        f" train.steps_per_epoch={STEPS_PER_EPOCH}")
 elif RECOVER:
     # Gate 6: the separator is frozen, so only the counting head learns. Its loss is the
     # only one left, which is also the cleanest test of whether the features can support

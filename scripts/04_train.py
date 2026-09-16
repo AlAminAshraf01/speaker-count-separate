@@ -77,6 +77,11 @@ def main() -> int:
     ap.add_argument("--best_metric", default="p_si_snr",
                     choices=["p_si_snr", "sisdri_count_correct", "count_acc", "neg_loss"])
     ap.add_argument("--dry_run", action="store_true", help="5 steps + 1 eval batch, then exit")
+    ap.add_argument("--dev_n", type=int, nargs="*", default=None,
+                    help="validate only on these speaker counts (default: all of "
+                         "them). A run that trains on one N wants a validation "
+                         "number for that N, not an average over four counts it "
+                         "never sees.")
     ap.add_argument("--no_throughput", action="store_true")
     args = ap.parse_args()
 
@@ -143,7 +148,9 @@ def main() -> int:
         p_clean=cfg.data.p_clean, n_weights=cfg.data.n_weights,
         min_crop_rms_ratio=cfg.data.min_crop_rms_ratio)
     dev_set = FrozenMixDataset(dev_store, dev_bank, recipes_dev, seg_len=length,
-                               max_n_src=cfg.model.max_n_src)
+                               max_n_src=cfg.model.max_n_src, n_list=args.dev_n)
+    if args.dev_n:
+        print(f"dev restricted to N in {sorted(args.dev_n)}: {len(dev_set)} mixtures")
 
     train_loader = build_loader(train_set, batch_size=cfg.train.batch_size, shuffle=False,
                                 num_workers=cfg.train.num_workers, drop_last=True,

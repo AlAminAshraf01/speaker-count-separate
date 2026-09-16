@@ -62,7 +62,7 @@ speaker-count-separate/
 │   ├── engine.py                train/eval loops, AMP, throughput measurement
 │   ├── interpret.py             filterbank, mask geometry, ablation
 │   └── config.py                YAML + dotted CLI overrides
-├── scripts/                     00…12, every one a standalone CLI
+├── scripts/                     00…14, every one a standalone CLI
 ├── notebooks/                   ready-to-upload .ipynb (source in notebooks/src/)
 ├── tests/                       50+ checks, run in 35 s, no pytest required
 ├── tools/                       notebook builder · fake corpus · test runner
@@ -87,6 +87,8 @@ speaker-count-separate/
 | `10_memory_bisect.py` | — | which component leaks host RAM, one subprocess per configuration |
 | `11_inspect_count_head.py` | — | why a counting head sits at chance: dead layer, flat features, or just wrong |
 | `12_preflight.py` | — | **the 30-second check every notebook runs first.** Stops the session instead of wasting it |
+| `13_inspect_separator.py` | — | why a trained separator is not separating: dead mask channels, collapsed scale, or just inaccurate |
+| `14_objective_ablation.py` | — | overfit one batch with and without the auxiliary loss terms: separates “broken” from “hard” |
 
 ---
 

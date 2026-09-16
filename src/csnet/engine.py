@@ -15,7 +15,7 @@ import torch
 
 from .constants import MAX_N_SRC, N_LIST, class_to_n
 from .memory import LeakWatch, MemoryGuard, format_snapshot
-from .metrics import matched_si_sdri, p_si_snr, si_sdr, summarise_per_n
+from .metrics import p_si_snr, si_sdr, summarise_per_n, usable_si_sdri
 from .utils import get_logger
 
 LOG = get_logger(__name__)
@@ -197,10 +197,15 @@ def batch_records(out: dict, batch: dict, max_n_src: int = MAX_N_SRC) -> list[di
             "input_si_sdr": float(np.mean([si_sdr(mix[b], s) for s in sources])),
             "p_si_snr": float(p_si_snr(est[b], sources, n_true, n_pred, max_n_src=max_n_src)),
             "si_sdri": None,
+            "n_degenerate": 0,
         }
         if n_pred == n_true:
-            record["si_sdri"] = matched_si_sdri(est[b, :max_n_src], sources,
-                                                mix[b], n_true).tolist()
+            usable, dropped = usable_si_sdri(est[b, :max_n_src], sources, mix[b], n_true)
+            # None, not [], so every `si_sdri is not None` test downstream keeps working:
+            # a mixture whose every source was degenerate contributes no measurement at
+            # all rather than an empty mean.
+            record["si_sdri"] = usable.tolist() or None
+            record["n_degenerate"] = dropped
         records.append(record)
     return records
 
@@ -261,6 +266,7 @@ def evaluate(model: torch.nn.Module, loader: Any, loss_fn: torch.nn.Module,
         result["sisdri_count_correct"] = (
             float(np.mean([np.mean(r["si_sdri"]) for r in correct])) if correct else float("nan"))
         result["input_si_sdr"] = float(np.mean([r["input_si_sdr"] for r in records]))
+        result["n_degenerate"] = int(sum(r.get("n_degenerate", 0) for r in records))
         result["per_n"] = summarise_per_n(records, n_list)
         result["n_utterances"] = len(records)
         if collect:

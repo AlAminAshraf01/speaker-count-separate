@@ -24,35 +24,7 @@ import numpy as np
 import torch
 
 from _common import banner, resolve
-
-
-def window_starts(n_samples: int, win: int, hop: int) -> list[int]:
-    """Window offsets covering the signal, with the last one flush to the end."""
-    if n_samples <= win:
-        return [0]
-    starts = list(range(0, n_samples - win + 1, hop))
-    if starts[-1] + win < n_samples:
-        starts.append(n_samples - win)
-    return starts
-
-
-def align_permutation(previous: np.ndarray, current: np.ndarray) -> list[int]:
-    """Match the current window's slots to the previous window's, over the overlap.
-
-    ``previous`` and ``current`` are ``(slots, overlap)``. Returns, for each previous
-    slot, the index of the current slot that continues it.
-    """
-    from scipy.optimize import linear_sum_assignment
-
-    a = previous - previous.mean(axis=1, keepdims=True)
-    b = current - current.mean(axis=1, keepdims=True)
-    a /= np.linalg.norm(a, axis=1, keepdims=True) + 1e-9
-    b /= np.linalg.norm(b, axis=1, keepdims=True) + 1e-9
-    rows, cols = linear_sum_assignment(-np.abs(a @ b.T))
-    mapping = list(range(current.shape[0]))
-    for r, c in zip(rows, cols):
-        mapping[int(r)] = int(c)
-    return mapping
+from csnet.inference import separate_long
 
 
 def main() -> int:
@@ -70,7 +42,7 @@ def main() -> int:
     ap.add_argument("--no_noise", dest="keep_noise", action="store_false")
     args = ap.parse_args()
 
-    from csnet.audio import read_wav, rms_normalize, write_wav
+    from csnet.audio import read_wav, write_wav
     from csnet.checkpoint import load_checkpoint
     from csnet.config import dict_to_cfg
     from csnet.constants import SR, class_to_n
@@ -94,53 +66,16 @@ def main() -> int:
     print(f"input : {args.input}  ({duration:.2f} s at {SR} Hz after resampling)")
     print(f"model : {model.describe()}")
 
-    win = int(args.win * SR)
-    hop = max(1, int(args.hop * SR))
-    overlap = max(0, win - hop)
-    padded = audio if len(audio) >= win else np.pad(audio, (0, win - len(audio)))
-    starts = window_starts(len(padded), win, hop)
-
-    n_slots = model.n_slots
+    # The windowing, alignment and overlap-add live in csnet.inference so that gate 2 in
+    # 06_evaluate.py runs the identical procedure. It used to have its own, which fed the
+    # model one ten-second block and scored zero correct counts out of three hundred.
+    result = separate_long(model, audio, device, win_seconds=args.win,
+                           hop_seconds=args.hop, batch_size=args.batch_size,
+                           agg={"mean_logit": "mean_prob"}.get(args.agg, args.agg))
     n_speaker_slots = cfg.model.max_n_src
-    accumulator = np.zeros((n_slots, len(padded)), dtype=np.float64)
-    weights = np.zeros(len(padded), dtype=np.float64)
-    fade = np.hanning(win).astype(np.float64) if len(starts) > 1 else np.ones(win)
-
-    logits_all: list[np.ndarray] = []
-    previous_tail: np.ndarray | None = None
-
-    with torch.no_grad():
-        for batch_start in range(0, len(starts), args.batch_size):
-            chunk = starts[batch_start:batch_start + args.batch_size]
-            block = np.stack([rms_normalize(padded[s:s + win]) for s in chunk])
-            out = model(torch.from_numpy(block).to(device))
-            estimates = out["est"].float().cpu().numpy()
-            logits_all.append(out["count_logits"].float().cpu().numpy())
-
-            for k, start in enumerate(chunk):
-                est = estimates[k]
-                if previous_tail is not None and overlap > 0:
-                    mapping = align_permutation(previous_tail, est[:, :overlap])
-                    est = est[mapping]
-                accumulator[:, start:start + win] += est * fade[None, :]
-                weights[start:start + win] += fade
-                previous_tail = est[:, -overlap:] if overlap > 0 else None
-
-    weights = np.maximum(weights, 1e-8)
-    separated = (accumulator / weights[None, :])[:, :len(audio)]
-
-    logits = np.concatenate(logits_all, axis=0)
-    shifted = logits - logits.max(axis=1, keepdims=True)
-    probs = np.exp(shifted) / np.exp(shifted).sum(axis=1, keepdims=True)
+    separated, probs, starts = result["est"], result["probs"], range(result["n_windows"])
     per_window = np.array([class_to_n(int(c)) for c in probs.argmax(axis=1)])
-
-    if args.agg == "mean_logit":
-        n_speakers = int(class_to_n(int(probs.mean(axis=0).argmax())))
-    elif args.agg == "median":
-        n_speakers = int(np.median(per_window))
-    else:
-        values, counts = np.unique(per_window, return_counts=True)
-        n_speakers = int(values[counts.argmax()])
+    n_speakers = int(class_to_n(result["cls"]))
     confidence = float(probs.mean(axis=0).max())
 
     banner(f"DETECTED {n_speakers} SPEAKER{'S' if n_speakers != 1 else ''}"

@@ -131,6 +131,108 @@ def test_summarise_per_n_ignores_miscounted_for_sisdri() -> None:
     assert abs(out[2]["si_sdri_count_correct"] - 7.0) < 1e-9
 
 
+def test_a_clean_single_speaker_mixture_has_no_improvement_to_measure() -> None:
+    """mix == s1, so SI-SDR improvement is a measurement of EPS, not of the model.
+
+    This one line of arithmetic turned a real +1.2 dB into a reported -8.68 dB. With
+    ``mix`` identical to the reference, ``si_sdr(mix, ref)`` is bounded only by EPS and
+    lands near 124 dB for a 3 s unit-RMS signal; subtracting that from any honest
+    estimate gives about -114 dB, and a quarter of the N=1 test set was exactly this.
+    """
+    from csnet.metrics import matched_si_sdri, si_sdr, usable_si_sdri
+
+    rng = np.random.default_rng(0)
+    source = rng.standard_normal(24000)
+    source /= np.sqrt((source ** 2).mean())
+    refs = source[None, :]
+    mix = source.copy()                                   # a clean single speaker
+    est = np.stack([0.9 * source + 0.1 * rng.standard_normal(24000)] + [
+        rng.standard_normal(24000) for _ in range(4)])
+
+    assert si_sdr(mix, source) > 100.0, si_sdr(mix, source)
+    naive = matched_si_sdri(est, refs, mix, 1)
+    assert naive[0] < -80.0, naive                        # what used to be averaged in
+
+    usable, dropped = usable_si_sdri(est, refs, mix, 1)
+    assert dropped == 1, dropped
+    assert usable.size == 0, usable
+
+
+def test_a_noisy_single_speaker_mixture_is_still_measured() -> None:
+    """Denoising one speaker is a real task with a real improvement. Keep it."""
+    from csnet.metrics import si_sdr, usable_si_sdri
+
+    rng = np.random.default_rng(1)
+    source = rng.standard_normal(24000)
+    noise = rng.standard_normal(24000)
+    source /= np.sqrt((source ** 2).mean())
+    noise /= np.sqrt((noise ** 2).mean())
+    mix = source + 0.178 * noise                          # about 15 dB SNR
+    refs = source[None, :]
+    est = np.stack([source + 0.05 * noise] + [rng.standard_normal(24000) for _ in range(4)])
+
+    assert 10.0 < si_sdr(mix, source) < 25.0, si_sdr(mix, source)
+    usable, dropped = usable_si_sdri(est, refs, mix, 1)
+    assert dropped == 0, dropped
+    assert usable.size == 1 and usable[0] > 5.0, usable
+
+
+def test_ordinary_multi_speaker_mixtures_are_untouched() -> None:
+    """The guard must not quietly change any number that was already correct."""
+    from csnet.metrics import matched_si_sdri, usable_si_sdri
+
+    rng = np.random.default_rng(2)
+    refs = rng.standard_normal((3, 24000))
+    mix = refs.sum(axis=0)
+    est = np.stack([refs[i] + 0.2 * rng.standard_normal(24000) for i in range(3)]
+                   + [rng.standard_normal(24000) for _ in range(2)])
+    before = matched_si_sdri(est, refs, mix, 3)
+    after, dropped = usable_si_sdri(est, refs, mix, 3)
+    assert dropped == 0
+    assert np.allclose(np.sort(before), np.sort(after)), (before, after)
+
+
+def test_the_guard_is_wired_into_the_record_builder() -> None:
+    """A correct metric that the evaluation does not call is not a fix.
+
+    ``batch_records`` is what produced the -8.68 dB headline, so assert there: a clean
+    single-speaker item must contribute no SI-SDRi and must say how many sources it
+    dropped, while a two-speaker item beside it is unaffected.
+    """
+    import torch
+
+    from csnet.engine import batch_records
+
+    rng = np.random.default_rng(3)
+    T = 8000
+    solo = rng.standard_normal(T).astype(np.float32)
+    pair = rng.standard_normal((2, T)).astype(np.float32)
+
+    refs = np.zeros((2, 5, T), dtype=np.float32)
+    refs[0, 0] = solo
+    refs[1, :2] = pair
+    mix = np.stack([solo, pair.sum(axis=0)])              # item 0: mix IS the reference
+    est = rng.standard_normal((2, 6, T)).astype(np.float32)
+    est[0, 0] = solo + 0.05 * rng.standard_normal(T)
+    est[1, :2] = pair + 0.05 * rng.standard_normal((2, T))
+
+    logits = np.full((2, 5), -10.0, dtype=np.float32)
+    logits[0, 0] = 10.0                                    # predicts N=1, correctly
+    logits[1, 1] = 10.0                                    # predicts N=2, correctly
+
+    out = {"est": torch.from_numpy(est), "count_logits": torch.from_numpy(logits)}
+    batch = {"refs": torch.from_numpy(refs), "mix": torch.from_numpy(mix),
+             "n_src": torch.tensor([1, 2]), "is_noisy": torch.tensor([0, 0]),
+             "snr_db": torch.tensor([0.0, 0.0])}
+    records = batch_records(out, batch, max_n_src=5)
+
+    assert records[0]["si_sdri"] is None, records[0]["si_sdri"]
+    assert records[0]["n_degenerate"] == 1, records[0]
+    assert records[1]["si_sdri"] is not None and len(records[1]["si_sdri"]) == 2
+    assert records[1]["n_degenerate"] == 0
+    assert min(records[1]["si_sdri"]) > 5.0, records[1]["si_sdri"]
+
+
 CHECKS = {name: fn for name, fn in sorted(globals().items()) if name.startswith("test_")}
 
 if __name__ == "__main__":

@@ -32,9 +32,18 @@ from _common import add_common_args, banner, build_store_and_bank, require_store
 
 def evaluate_official_libri2mix(model, libri_dir, split, device, limit, max_seconds,
                                 max_n_src):
-    """Gate 2: the official, unmodified Libri2Mix test set at a known N = 2."""
-    from csnet.audio import read_wav, rms_normalize
+    """Gate 2: the official, unmodified Libri2Mix test set at a known N = 2.
+
+    The audio is untouched; the *inference* is the project's own, which means overlapping
+    3-second RMS-normalised windows rather than one long block. That distinction is not
+    cosmetic. Handing the model a ten-second utterance in one piece scored **0 correct
+    counts out of 300** here while the same checkpoint scored 52 % on our own 3 s N=2
+    mixtures -- the model has never seen an input of any other length, and the counting
+    head pools statistics over the whole time axis.
+    """
+    from csnet.audio import read_wav
     from csnet.constants import SR, n_to_class
+    from csnet.inference import separate_long
     from csnet.metrics import matched_si_sdri
 
     mix_dir = os.path.join(libri_dir, split, "mix_clean")
@@ -43,7 +52,7 @@ def evaluate_official_libri2mix(model, libri_dir, split, device, limit, max_seco
     names = sorted(f for f in os.listdir(mix_dir) if f.lower().endswith(".wav"))[:limit]
     max_len = int(max_seconds * SR) if max_seconds else None
 
-    sisdri, correct = [], []
+    sisdri, correct, windows = [], [], []
     for name in names:
         mix, _ = read_wav(os.path.join(mix_dir, name), sr=SR)
         sources = []
@@ -61,19 +70,17 @@ def evaluate_official_libri2mix(model, libri_dir, split, device, limit, max_seco
             length = min(length, max_len)
         mix, sources = mix[:length], np.stack([s[:length] for s in sources])
 
-        tensor = torch.from_numpy(rms_normalize(mix)).unsqueeze(0).to(device)
-        with torch.no_grad():
-            out = model(tensor)
-        est = out["est"][0].float().cpu().numpy()
-        pred = int(out["count_logits"][0].argmax().item())
-        correct.append(int(pred == n_to_class(2)))
-        sisdri.append(float(np.mean(matched_si_sdri(est[:max_n_src], sources, mix, 2))))
+        result = separate_long(model, mix, device)
+        correct.append(int(result["cls"] == n_to_class(2)))
+        windows.append(result["n_windows"])
+        sisdri.append(float(np.mean(
+            matched_si_sdri(result["est"][:max_n_src], sources, mix, 2))))
 
     if not sisdri:
         return None
     return {"n_files": len(sisdri), "si_sdri": float(np.mean(sisdri)),
             "si_sdri_std": float(np.std(sisdri)), "count_acc": float(np.mean(correct)),
-            "reference_asteroid": 14.76}
+            "mean_windows": float(np.mean(windows)), "reference_asteroid": 14.76}
 
 
 def main() -> int:
@@ -184,7 +191,14 @@ def main() -> int:
     banner("2 & 3 - separation")
     print(f"P-SI-SNR over the whole test set : {results['p_si_snr']:8.2f} dB")
     print(f"SI-SDRi on count-correct subset  : {results['sisdri_count_correct']:8.2f} dB")
-    print(f"input SI-SDR (unprocessed)       : {results['input_si_sdr']:8.2f} dB\n")
+    print(f"input SI-SDR (unprocessed)       : {results['input_si_sdr']:8.2f} dB")
+    degenerate = int(results.get("n_degenerate", 0))
+    if degenerate:
+        # Almost always clean single-speaker mixtures, where mix == s1 exactly. Saying so
+        # costs one line and stops the next reader wondering why a column is short.
+        print(f"sources with no improvement to measure : {degenerate} excluded "
+              f"(the mixture already was the reference)")
+    print()
 
     per_n_rows = []
     for n, stats in results["per_n"].items():
@@ -294,6 +308,8 @@ def main() -> int:
             print(f"gap            : {gap:+.2f} dB   "
                   f"{'PASS (within 1 dB)' if abs(gap) <= 1.0 else 'below target'}")
             print(f"count accuracy : {official['count_acc'] * 100:.1f} % (should predict N=2)")
+            print(f"inference      : {official['mean_windows']:.1f} windows per file of "
+                  f"3 s at 50 % overlap -- the same input shape the model was trained on")
             report["official_libri2mix"] = official
 
     # ---------------------------------------------------------- markdown

@@ -1,0 +1,41 @@
+# Gate 2: the fixed-N=2 control run the design document mandates *before* trusting any
+# number at N > 2. It was never run, and forty epochs of the pooled N=1..5 model came back
+# at +1.2 dB SI-SDRi against a published 14.76 dB. This config answers the only question
+# that matters next: is the pipeline incapable, or is the pooled task simply much harder?
+#
+# Everything here is the standard fixed-speaker-count setup that 14.76 dB was measured
+# under, expressed as overrides rather than as a different codebase:
+#
+#   n_weights [0,1,0,0,0]  every training mixture has exactly two speakers. The model keeps
+#                          five slots and five classes -- `n_to_class` reads the global
+#                          N_LIST, so shrinking n_list would break the label mapping -- it
+#                          simply never sees any other count.
+#   w_count 0              with one count in the data the counting term is a constant.
+#   w_sil 0                the three spare slots are unconstrained. Published fixed-N
+#                          systems have no spare slots at all, so leaving them free is the
+#                          closer comparison, and a single-batch A/B measured the silence
+#                          term costing about 9 dB of progress at matched step count.
+#
+# Budget: 8 epochs is about 2.5 GPU-h at 1045 ms/step. Watch `val sisdr` on the epoch line.
+#
+#   python scripts/04_train.py --config configs/gate2.yaml --store ... --dev_n 2 \
+#       --ckpt_dir /kaggle/working/ckpt_gate2 --resume none --best_metric sisdr
+#
+# Reading it: 8-12 dB says the pipeline is sound and the pooled five-count task plus a
+# forty-epoch budget is the whole story -- a finding, and a defensible one. Still near
+# 1 dB says something deeper is wrong, and `scripts/13_inspect_separator.py` is next.
+_base_: paper.yaml
+name: csnet-gate2
+
+data:
+  n_weights: [0.0, 1.0, 0.0, 0.0, 0.0]
+
+train:
+  epochs: 8
+  steps_per_epoch: 1000
+
+loss:
+  w_sep: 1.0
+  w_sil: 0.0
+  w_count: 0.0
+  w_noise: 0.2
