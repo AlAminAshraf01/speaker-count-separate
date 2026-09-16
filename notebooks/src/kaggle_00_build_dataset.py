@@ -47,6 +47,10 @@ import sys
 sys.path.insert(0, os.path.join(REPO, "scripts"))
 from _common import autodetect_libri2mix
 
+run(f"python scripts/12_preflight.py --for data"
+    f" --cells_src {CELLS_SRC} --cells_sha {CELLS_SHA}")
+
+# %%
 LIBRI2MIX_DIR = autodetect_libri2mix()          # or hard-code the path yourself
 STORE = "/kaggle/working/store"
 DATA = "/kaggle/working/data"

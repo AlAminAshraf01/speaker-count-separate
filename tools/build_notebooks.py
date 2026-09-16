@@ -22,12 +22,42 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import sys
 
 CELL_MARKER = "# %%"
 INCLUDE_MARKER = "# %include "
+
+
+def cells_fingerprint(src_dir: str, name: str) -> str:
+    """Short hash of one notebook's percent source plus the shared bootstrap.
+
+    Stamped into every generated notebook so the copy running on Kaggle can tell whether
+    its cells predate the repo it just cloned. **This must stay byte-identical to
+    ``cells_fingerprint`` in ``notebooks/src/_bootstrap.py``** -- that file cannot be
+    imported here because importing it clones a repo. ``tests/test_notebooks.py`` execs
+    the other copy and asserts the two agree, so the duplication cannot drift silently.
+    """
+    digest = hashlib.sha256()
+    for part in (name, "_bootstrap.py"):
+        with open(os.path.join(src_dir, part), "rb") as fh:
+            digest.update(fh.read().replace(b"\r\n", b"\n"))
+        digest.update(b"\0")
+    return digest.hexdigest()[:16]
+
+
+def stamp_cell(src_name: str, sha: str) -> dict:
+    """The first cell of every notebook: what it was built from, and when."""
+    body = [
+        "# Written by tools/build_notebooks.py -- do not edit. The bootstrap cell below",
+        "# compares this against the repo it clones and tells you if these cells are old.",
+        f'CELLS_SRC = "{src_name}"',
+        f'CELLS_SHA = "{sha}"',
+    ]
+    return {"cell_type": "code", "metadata": {}, "execution_count": None, "outputs": [],
+            "source": _as_source(body)}
 
 
 def expand_includes(text: str, base_dir: str, depth: int = 0) -> str:
@@ -111,9 +141,9 @@ def _as_source(lines: list[str]) -> list[str]:
     return [ln + "\n" for ln in lines[:-1]] + [lines[-1]]
 
 
-def to_notebook(text: str, kernel: str = "python3") -> dict:
+def to_notebook(text: str, kernel: str = "python3", stamp: dict | None = None) -> dict:
     """Render percent-format source text as an nbformat-4 notebook dict."""
-    cells = []
+    cells = [stamp] if stamp else []
     for cell_type, raw in split_cells(text):
         body = _trim(_strip_comment(raw) if cell_type != "code" else raw)
         if not body:
@@ -167,7 +197,8 @@ def main() -> int:
         src_path = os.path.join(args.src, name)
         out_path = os.path.join(args.out, name[:-3] + ".ipynb")
         with open(src_path, "r", encoding="utf-8") as fh:
-            nb = to_notebook(expand_includes(fh.read(), args.src))
+            nb = to_notebook(expand_includes(fh.read(), args.src),
+                             stamp=stamp_cell(name, cells_fingerprint(args.src, name)))
         payload = json.dumps(nb, indent=1, ensure_ascii=False) + "\n"
 
         if args.check:

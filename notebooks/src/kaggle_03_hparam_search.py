@@ -50,6 +50,10 @@ for path in glob.glob("/kaggle/input/**/search/search_results.json", recursive=T
 print("store :", STORE)
 assert STORE, "attach the 00_build_dataset notebook output"
 
+# %%
+run(f"python scripts/12_preflight.py --for search --store {STORE}"
+    f" --cells_src {CELLS_SRC} --cells_sha {CELLS_SHA}")
+
 # %% [markdown]
 # ## The search space
 #

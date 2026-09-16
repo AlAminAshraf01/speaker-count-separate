@@ -62,7 +62,7 @@ speaker-count-separate/
 │   ├── engine.py                train/eval loops, AMP, throughput measurement
 │   ├── interpret.py             filterbank, mask geometry, ablation
 │   └── config.py                YAML + dotted CLI overrides
-├── scripts/                     00…09, every one a standalone CLI
+├── scripts/                     00…12, every one a standalone CLI
 ├── notebooks/                   ready-to-upload .ipynb (source in notebooks/src/)
 ├── tests/                       50+ checks, run in 35 s, no pytest required
 ├── tools/                       notebook builder · fake corpus · test runner
@@ -84,6 +84,9 @@ speaker-count-separate/
 | `07_interpret.py` | **2** + **5b** | filterbank, mask geometry vs N, filter ablation |
 | `08_infer.py` | — | any audio in → speaker count + clean tracks out |
 | `09_publish_dataset.py` | — | publish the packed store as a real Kaggle Dataset (optional) |
+| `10_memory_bisect.py` | — | which component leaks host RAM, one subprocess per configuration |
+| `11_inspect_count_head.py` | — | why a counting head sits at chance: dead layer, flat features, or just wrong |
+| `12_preflight.py` | — | **the 30-second check every notebook runs first.** Stops the session instead of wasting it |
 
 ---
 

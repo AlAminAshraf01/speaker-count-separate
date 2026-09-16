@@ -56,6 +56,11 @@ print("recipes :", DATA)
 assert STORE, "attach the 00_build_dataset notebook output via '+ Add Input'"
 assert os.path.exists(os.path.join(DATA, "recipes_test.csv")), "recipes_test.csv not found"
 
+# %%
+run(f"python scripts/12_preflight.py --for eda --store {STORE}"
+    f" --recipes_dev {os.path.join(DATA, 'recipes_dev.csv')}"
+    f" --cells_src {CELLS_SRC} --cells_sha {CELLS_SHA}")
+
 # %% [markdown]
 # ## Step 0 - is the frozen set actually frozen?
 #

@@ -353,6 +353,11 @@ with music underneath.
 | Disk full at ~20 GB | store + checkpoints + renders | drop `--render_wav`, or `--set train.keep_last_k=1` |
 | Counting is stuck at one class | count term too weak, or too early | raise `loss.w_count` to 1.0; check the loss is falling at all |
 | `nan` in the loss | LR too high, or fp16 overflow | `--set train.lr=5e-4`, or `train.amp=False` to confirm the cause |
+| `PREFLIGHT: STOP` | one of the rows above it | read the `->` line under that row; nothing has been spent |
+| Cells run old code after a push | the `.ipynb` was not re-imported | preflight says `cells STALE`; **File → Import Notebook** again |
+| Run finishes in seconds, `epochs completed: 39` | `train.epochs` is a target and you resumed past it | use `--extra_epochs N`; §9.1 |
+| Evaluation numbers look wrong but plausible | it loaded `_dryrun/best.pt` | fixed: checkpoints are now ranked by step, not path |
+| `no train_log.csv yet` after a full run | the progress cell pointed at the other checkpoint dir | fixed: `CKPT_DIR` follows `RECOVER` |
 | Everything looks wrong | — | `python tools/run_all_tests.py` — 35 s, and it localises the problem |
 
 ### Quota management
@@ -361,6 +366,7 @@ with music underneath.
 - Check your remaining quota at the top-right of any notebook editor before starting a long run.
 - Quota resets weekly, not daily. A failed 11-hour run costs 11 hours.
 - `--dry_run` costs seconds. Use it every time you change a path.
+- `scripts/12_preflight.py` costs 30 seconds and catches the rest. See §9.
 
 ### The rules that are easy to break
 
@@ -369,3 +375,99 @@ with music underneath.
 3. **Never evaluate on dev and report it as test.**
 4. **Pass gate 2 before believing anything at N > 2.**
 5. **Report SI-SDR improvement, per N** — never a single average across speaker counts.
+
+---
+
+## 9. The routine that cannot go wrong
+
+Every expensive failure this project has had was visible in the first minute and nobody
+looked:
+
+| What happened | Cost | Visible beforehand? |
+|---|---|---|
+| Cells imported two pushes ago ran the old bisect | 2 sessions | yes — the commit was printed |
+| `range(38, 12)` trained nothing and exited 0 | 1 session | yes — both numbers were on screen |
+| DataParallel leaked 17 MiB/step until the OOM killer arrived | 2 sessions, ~7 h | yes — the RAM line climbed all run |
+| The progress plot read `ckpt/` while the run wrote `ckpt_count/` | a confusing hour | yes |
+
+So the answer is not "be more careful". It is a cell that looks, and refuses.
+
+### 9.1 Preflight
+
+Every notebook now runs `scripts/12_preflight.py` before it spends anything. It takes about
+thirty seconds, uses no GPU, writes nothing, and **exits non-zero on a blocking problem**,
+which stops the notebook then and there.
+
+| Row | STOP means | What to do |
+|---|---|---|
+| `code` | — | informational: the commit every log below came from |
+| `cells` | these cells predate the repo they just cloned | **File → Import Notebook →** upload it again, re-attach inputs |
+| `gpu` | a GPU notebook has no GPU | **Settings → Accelerator → GPU T4 ×2** |
+| `host ram` | the container is already 70 % full before training | **Run → Restart & Clear Cell Outputs** |
+| `disk` | under 2 GB left in `/kaggle/working` | delete old checkpoint directories; a Save Version needs the room |
+| `store` | notebook 00's output is not attached | **+ Add Input → Notebook Output →** `00_build_dataset` |
+| `recipes` | the frozen dev/test set is missing or empty | same as above |
+| `checkpoint` | the only checkpoint visible is the 5-step dry run | attach the training notebook's output |
+| `config` | `dataparallel` is on, or the config will not load | read the `->` line; it names the fix |
+| `epochs` | the epoch range is empty, so nothing would train | use `--extra_epochs N`, not `train.epochs=N` |
+| `budget` | — | warns when the plan exceeds the session; that is normal and resumable |
+
+A warning is not a stopper. Read it, then continue. `--strict` turns warnings into stoppers
+if you would rather be told twice.
+
+**A check that fails is reported as a warning, never as a crash.** A preflight that can take
+down an otherwise healthy notebook is a worse bug than the ones it finds.
+
+### 9.2 Stale cells — the failure you cannot see
+
+`scripts/` and `src/` fix themselves: the bootstrap fast-forwards the clone every session,
+and prints `updated <old> -> <new>`. **Notebook cells do not.** Kaggle owns them, and the
+only way to refresh them is to import the `.ipynb` again.
+
+Every built notebook now carries a fingerprint of the source it came from, and the bootstrap
+recomputes that fingerprint from the freshly-cloned repo:
+
+```
+cells current (2b3f7c6127647c23)         <- the cells match the repo
+cells STALE  cells 9f8e... but repo has 2b3f...   <- import the notebook again
+```
+
+So the rule on the laptop side is one command, every time, before pushing:
+
+```bash
+python tools/build_notebooks.py && python tools/run_all_tests.py --quiet
+```
+
+The test suite fails if a notebook was not rebuilt, so a stale `.ipynb` cannot reach GitHub.
+
+### 9.3 The five steps, in this order, every session
+
+1. **Laptop:** edit, then `python tools/build_notebooks.py && python tools/run_all_tests.py --quiet`, then commit and push.
+2. **Kaggle:** open the notebook, **File → Import Notebook**, upload the rebuilt `.ipynb`. *Only needed when the cells changed — preflight tells you.*
+3. **+ Add Input:** the `00_build_dataset` output, plus the training notebook's own latest output when resuming.
+4. **Settings → Accelerator:** GPU T4 ×2 for notebooks 02–05; **None** for 00 and 01.
+5. **Save Version → Save & Run All (Commit) → Save.** Never leave a long run in an interactive tab: closing the tab kills it, and `/kaggle/working` is wiped.
+
+### 9.4 The quota ledger
+
+Free tier: **30 GPU-hours per week**, resetting weekly, and a **12-hour** cap per session.
+The meter is at the top-right of the notebook editor — read it *before* starting, not after.
+
+| Notebook | Accelerator | Cost | Notes |
+|---|---|---|---|
+| 00 build dataset | **None** | 0 | CPU-only; a GPU here is pure waste |
+| 01 EDA and leak | **None** | 0 | CPU-only |
+| 02 train, full run | GPU | ~11 h/session × 2 | 40 epochs at ~19 min each |
+| 02 recover (count head only) | GPU | ~1.4 h | separator frozen: 331 ms/step, not 1045 |
+| 03 hparam search | GPU | 1.5–2.5 h | optional; skip it if quota is tight |
+| 04 evaluate | GPU | 10–25 min | the deliverable |
+| 05 interpretability | GPU | 15–30 min | the deliverable |
+| 06 demo | any | seconds | run it on CPU |
+
+Two rules keep you inside the budget:
+
+* **A failed 11-hour run costs 11 hours.** Preflight and the dry run cost 90 seconds
+  between them. That ratio is the whole argument.
+* **Never start a long run with under 12 hours left on the meter.** It will be cut off
+  mid-epoch rather than stopping cleanly on its own budget, and a hard kill loses whatever
+  has happened since the last mid-epoch checkpoint.

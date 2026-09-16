@@ -36,20 +36,25 @@
 # %%
 import sys
 sys.path.insert(0, os.path.join(REPO, "scripts"))
-from _common import autodetect_store
+from _common import autodetect_ckpt, autodetect_store
 import glob
 
 STORE = autodetect_store()
 hits = (glob.glob("/kaggle/input/**/recipes_test.csv", recursive=True)
         + glob.glob(os.path.join(REPO, "data", "recipes_test.csv")))
 RECIPES_TEST = hits[0] if hits else None
-ckpts = sorted(glob.glob("/kaggle/input/**/best.pt", recursive=True)
-               + glob.glob("/kaggle/working/**/best.pt", recursive=True))
-CKPT = ckpts[0] if ckpts else None
+# By recorded step, so the 30-second dry run cannot win on alphabetical order.
+print("checkpoints visible:")
+CKPT = autodetect_ckpt()
 
-print("store     :", STORE)
+print("\nstore     :", STORE)
 print("checkpoint:", CKPT)
 assert CKPT and STORE and RECIPES_TEST, "attach the 00_build_dataset and 02_train outputs"
+
+# %%
+run(f"python scripts/12_preflight.py --for interpret"
+    f" --store {STORE} --recipes_test {RECIPES_TEST}"
+    f" --cells_src {CELLS_SRC} --cells_sha {CELLS_SHA}")
 
 # %%
 run(f"python scripts/07_interpret.py"

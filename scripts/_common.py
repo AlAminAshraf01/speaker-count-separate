@@ -120,6 +120,69 @@ def autodetect_store(hint: str | None = None) -> str | None:
     return _search(["/kaggle/input"], _looks_like_store)
 
 
+CKPT_ROOTS = ("/kaggle/working", "/kaggle/input")
+
+
+def _find_files(roots: Sequence[str], filename: str, max_depth: int = 7) -> list[str]:
+    """Bounded search for every ``filename`` under ``roots``.
+
+    ``glob("/kaggle/input/**/best.pt", recursive=True)`` walks the 14,000-file LibriMix
+    tree to find three checkpoints. This prunes the same leaf directories the store
+    search prunes, plus hidden ones, and stops descending well before a corpus.
+    """
+    found: list[str] = []
+    for root in roots:
+        if not root or not os.path.isdir(root):
+            continue
+        base_depth = os.path.abspath(root).rstrip(os.sep).count(os.sep)
+        for dirpath, dirnames, files in os.walk(root):
+            if filename in files:
+                found.append(os.path.join(dirpath, filename))
+            depth = os.path.abspath(dirpath).count(os.sep) - base_depth
+            if depth >= max_depth:
+                dirnames[:] = []
+            else:
+                dirnames[:] = [d for d in sorted(dirnames)
+                               if d not in _LEAF_DIRS and not d.startswith(".")]
+    return found
+
+
+def rank_checkpoints(name: str = "best.pt",
+                     roots: Sequence[str] = CKPT_ROOTS) -> list[tuple[str, int]]:
+    """Visible checkpoints paired with their recorded global step, furthest-along first.
+
+    Ranking matters more than it sounds. A training notebook's output holds
+    ``_dryrun/best.pt`` from the 30-second plumbing check next to the real run's
+    checkpoint, and ``sorted(glob(...))[0]`` picks the alphabetically first path -- which
+    is ``_dryrun``, because ``_`` sorts before any letter. That silently evaluates a
+    five-step model and reports it as the result. Step count cannot be confused that way.
+    """
+    from csnet.checkpoint import checkpoint_step
+
+    paths = _find_files(roots, name)
+    ranked = [(p, checkpoint_step(p)) for p in dict.fromkeys(paths)]
+    ranked.sort(key=lambda pair: (pair[1], os.path.getmtime(pair[0])), reverse=True)
+    return ranked
+
+
+def autodetect_ckpt(hint: str | None = None, name: str = "best.pt",
+                    roots: Sequence[str] = CKPT_ROOTS, verbose: bool = True) -> str | None:
+    """The furthest-along visible checkpoint, with the also-rans printed for audit."""
+    if hint and os.path.isfile(hint):
+        return os.path.normpath(hint)
+    ranked = rank_checkpoints(name, roots)
+    if not ranked:
+        return None
+    if verbose:
+        for i, (path, step) in enumerate(ranked):
+            mark = "->" if i == 0 else "  "
+            known = f"step {step}" if step >= 0 else "step unknown"
+            print(f"  {mark} {path}  ({known})")
+        if len(ranked) > 1 and ranked[0][1] >= 0:
+            print(f"  picked the furthest-along of {len(ranked)}, not the first by name")
+    return ranked[0][0]
+
+
 def build_store_and_bank(store_root: str, split: str, *, mmap: bool = True,
                          noise_store: str | None = None,
                          noise_kinds: Sequence[str] | None = None,

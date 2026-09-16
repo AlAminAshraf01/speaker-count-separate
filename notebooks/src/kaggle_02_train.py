@@ -43,7 +43,6 @@ STORE = autodetect_store()
 hits = (glob.glob("/kaggle/input/**/recipes_dev.csv", recursive=True)
         + glob.glob(os.path.join(REPO, "data", "recipes_dev.csv")))
 RECIPES_DEV = hits[0] if hits else None
-CKPT_DIR = "/kaggle/working/ckpt"
 
 print("store      :", STORE)
 print("dev recipes:", RECIPES_DEV)
@@ -161,10 +160,39 @@ print("\ncheckpoints visible from a previous session:", previous or "none (first
 
 # %%
 CONFIG = "configs/paper.yaml"
-EPOCHS = 40                # measured: ~30 min/epoch, so ~21 epochs per 11 h session
+EPOCHS = 40                # measured: ~19 min/epoch, so ~37 epochs per 11 h session
 BATCH_SIZE = 12          # drop to 8 if you hit CUDA OOM
 TIME_BUDGET_H = 11.0     # stop cleanly before Kaggle's 12 h cap
 STEPS_PER_EPOCH = 1000
+
+# The two switches that change what this notebook does. They live here, above everything
+# that reads them, because CKPT_DIR depends on RECOVER: the recovery run writes to its own
+# directory, and a progress plot pointed at the other one silently shows nothing.
+RECOVER = False          # True: keep the separator, re-init the counting head, train it alone
+BISECT = False           # True: spend ~15 min finding which component leaks, and train nothing
+EXTRA_EPOCHS = 12        # RECOVER only: this many MORE epochs, counted from the checkpoint
+
+CKPT_DIR = "/kaggle/working/ckpt_count" if RECOVER else "/kaggle/working/ckpt"
+print("writing to :", CKPT_DIR)
+
+# %% [markdown]
+# ## Preflight (30 seconds, no quota)
+#
+# Every expensive failure this project has had was visible in the first minute: cells
+# imported two pushes ago, a resume that picked the five-step dry run, an epoch range that
+# was empty, a container already half full of RAM. This cell checks those and **stops the
+# notebook** rather than letting an eleven-hour session discover them.
+#
+# If it says `PREFLIGHT: STOP`, read the `->` line under the failing row. Nothing has been
+# spent yet.
+
+# %%
+run(f"python scripts/12_preflight.py --for {'recover' if RECOVER else 'train'}"
+    f" --config {CONFIG} --store {STORE} --recipes_dev {RECIPES_DEV}"
+    f" --ckpt_dir {CKPT_DIR} --time_budget_h {TIME_BUDGET_H}"
+    + (f" --extra_epochs {EXTRA_EPOCHS}" if RECOVER else f" --epochs {EPOCHS}")
+    + f" --cells_src {CELLS_SRC} --cells_sha {CELLS_SHA}"
+    f" --set train.batch_size={BATCH_SIZE} train.steps_per_epoch={STEPS_PER_EPOCH}")
 
 # %% [markdown]
 # ## Plumbing check first (30 seconds)
@@ -183,20 +211,15 @@ run(f"python scripts/04_train.py --config {CONFIG}"
 # budget actually buys. **That measurement replaces the FLOP table** - depthwise separable
 # 1-D convolutions are memory-bound, so a peak-TFLOPS estimate is not worth much.
 #
-# `--resume auto` means: use `/kaggle/working/ckpt/last.pt` if it exists, otherwise the newest
-# `last.pt` in any attached dataset, otherwise start fresh.
+# `--resume auto` means: use `CKPT_DIR/last.pt` if it exists, otherwise the **furthest-along**
+# `last.pt` in any attached dataset, otherwise start fresh. Furthest-along, not newest: a
+# notebook output holds `_dryrun/last.pt` beside the real one and picking by timestamp is a
+# coin flip that, lost, restarts eleven hours of training from step 5.
 
 # %%
-RECOVER = False      # True: keep the separator, re-init the counting head, train it alone
-BISECT = False       # True: spend ~15 min finding which component leaks, and train nothing
-
 if BISECT:
     run(f"python scripts/10_memory_bisect.py --store {STORE}"
         f" --config {CONFIG} --set train.batch_size={BATCH_SIZE}")
-
-# %%
-if BISECT:
-    pass
 elif RECOVER:
     # Gate 6: the separator is frozen, so only the counting head learns. Its loss is the
     # only one left, which is also the cleanest test of whether the features can support
@@ -205,11 +228,11 @@ elif RECOVER:
         f" --config {CONFIG}"
         f" --store {STORE}"
         f" --recipes_dev {RECIPES_DEV}"
-        f" --ckpt_dir /kaggle/working/ckpt_count"
+        f" --ckpt_dir {CKPT_DIR}"
         f" --resume auto --reset_count_head"
         f" --time_budget_h {TIME_BUDGET_H}"
         f" --best_metric count_acc"
-        f" --extra_epochs 12"          # more epochs from here, not an absolute target
+        f" --extra_epochs {EXTRA_EPOCHS}"   # more epochs from here, not an absolute target
         f" --set train.batch_size={BATCH_SIZE}"
         f" train.steps_per_epoch={STEPS_PER_EPOCH}"
         f" train.freeze_separator=True"
@@ -266,12 +289,18 @@ if df is not None:
     plt.show()
 
     print(f"total wall clock across all sessions: {df['wall_h'].max():.2f} h")
-    best = df["val_p_si_snr"].dropna()
-    if best.empty:
-        print("no validated epoch yet, so there is no best P-SI-SNR to report")
-    else:
-        print(f"best val P-SI-SNR: {best.max():.2f} dB "
-              f"at epoch {int(df.loc[best.idxmax(), 'epoch'])}")
+    for column, label, unit, scale in (("val_p_si_snr", "P-SI-SNR", "dB", 1.0),
+                                       ("val_count_acc", "count accuracy", "%", 100.0)):
+        best = df[column].dropna()
+        if best.empty:
+            print(f"no validated epoch yet, so there is no best {label} to report")
+        else:
+            print(f"best val {label}: {scale * best.max():.2f} {unit} "
+                  f"at epoch {int(df.loc[best.idxmax(), 'epoch'])}")
+    # The bar the counting head has to clear is not chance (20 %) but the naive predictor
+    # measured in notebook 01: 41.1 %. Anything between the two is a model that has
+    # learned the level cue and nothing else.
+    print("naive-predictor floor to beat: 41.1 %   (chance is 20.0 %)")
 elif not os.path.exists(log):
     print("no train_log.csv yet")
 

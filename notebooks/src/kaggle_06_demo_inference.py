@@ -31,13 +31,17 @@
 import glob
 import sys
 sys.path.insert(0, os.path.join(REPO, "scripts"))
-from _common import autodetect_store
+from _common import autodetect_ckpt, autodetect_store
 
-ckpts = sorted(glob.glob("/kaggle/input/**/best.pt", recursive=True)
-               + glob.glob("/kaggle/working/**/best.pt", recursive=True))
-CKPT = ckpts[0] if ckpts else None
-print("checkpoint:", CKPT)
+# By recorded step, so the 30-second dry run cannot win on alphabetical order.
+print("checkpoints visible:")
+CKPT = autodetect_ckpt()
+print("\ncheckpoint:", CKPT)
 assert CKPT, "attach the 02_train notebook output"
+
+# %%
+run(f"python scripts/12_preflight.py --for demo"
+    f" --cells_src {CELLS_SRC} --cells_sha {CELLS_SHA}")
 
 # A rendered test mixture makes a good first demo because you have the ground truth.
 candidates = sorted(glob.glob("/kaggle/input/**/samples/**/*_mix.wav", recursive=True))

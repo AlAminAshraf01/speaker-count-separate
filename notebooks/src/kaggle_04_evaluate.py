@@ -38,7 +38,7 @@
 # %%
 import sys
 sys.path.insert(0, os.path.join(REPO, "scripts"))
-from _common import autodetect_store, autodetect_libri2mix
+from _common import autodetect_ckpt, autodetect_libri2mix, autodetect_store
 import glob
 
 STORE = autodetect_store()
@@ -47,16 +47,31 @@ hits = (glob.glob("/kaggle/input/**/recipes_test.csv", recursive=True)
         + glob.glob(os.path.join(REPO, "data", "recipes_test.csv")))
 RECIPES_TEST = hits[0] if hits else None
 
-ckpts = sorted(glob.glob("/kaggle/input/**/best.pt", recursive=True)
-               + glob.glob("/kaggle/working/**/best.pt", recursive=True))
-CKPT = ckpts[0] if ckpts else None
+# Ranked by recorded global step, not by path. A training notebook's output holds
+# `_dryrun/best.pt` from the 30-second plumbing check next to the real run's checkpoint,
+# and `_` sorts before every letter -- so picking the first path by name evaluates a
+# five-step model and prints it as the result, with nothing in the log to say so.
+print("checkpoints visible:")
+CKPT = autodetect_ckpt()
 
-print("store       :", STORE)
+print("\nstore       :", STORE)
 print("test recipes:", RECIPES_TEST)
 print("checkpoint  :", CKPT)
 print("official    :", LIBRI2MIX)
 assert CKPT, "attach the 02_train notebook output so best.pt is visible"
 assert STORE and RECIPES_TEST, "attach the 00_build_dataset notebook output"
+
+# %% [markdown]
+# ## Preflight (30 seconds, no quota)
+#
+# Checks the things that have actually gone wrong before: stale cells, a checkpoint that is
+# really the dry run, a missing frozen test set. It **stops the notebook** instead of
+# producing a plausible-looking table from the wrong model.
+
+# %%
+run(f"python scripts/12_preflight.py --for evaluate"
+    f" --store {STORE} --recipes_test {RECIPES_TEST}"
+    f" --cells_src {CELLS_SRC} --cells_sha {CELLS_SHA}")
 
 # %% [markdown]
 # ## Run the benchmark
