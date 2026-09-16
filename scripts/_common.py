@@ -166,11 +166,28 @@ def rank_checkpoints(name: str = "best.pt",
 
 
 def autodetect_ckpt(hint: str | None = None, name: str = "best.pt",
-                    roots: Sequence[str] = CKPT_ROOTS, verbose: bool = True) -> str | None:
-    """The furthest-along visible checkpoint, with the also-rans printed for audit."""
+                    roots: Sequence[str] = CKPT_ROOTS, verbose: bool = True,
+                    contains: str | None = None) -> str | None:
+    """The furthest-along visible checkpoint, with the also-rans printed for audit.
+
+    ``contains`` narrows the candidates to paths holding that substring, which is how you
+    ask for a specific run by its checkpoint directory -- ``contains="ckpt_gate2"``. Step
+    count is the right default but the wrong answer when a short control run is exactly
+    the one you want to evaluate: it will always have fewer steps than the long run it is
+    being compared against.
+    """
     if hint and os.path.isfile(hint):
         return os.path.normpath(hint)
     ranked = rank_checkpoints(name, roots)
+    if contains:
+        narrowed = [pair for pair in ranked if contains in pair[0].replace("\\", "/")]
+        if not narrowed:
+            available = sorted({os.path.basename(os.path.dirname(p)) for p, _ in ranked})
+            raise SystemExit("\n".join([
+                f"no checkpoint path contains {contains!r}.",
+                f"  Visible checkpoint directories: {available or 'none'}",
+                "  Attach the notebook output that holds it, or clear the filter."]))
+        ranked = narrowed
     if not ranked:
         return None
     if verbose:

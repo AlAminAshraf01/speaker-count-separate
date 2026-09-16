@@ -47,12 +47,19 @@ hits = (glob.glob("/kaggle/input/**/recipes_test.csv", recursive=True)
         + glob.glob(os.path.join(REPO, "data", "recipes_test.csv")))
 RECIPES_TEST = hits[0] if hits else None
 
-# Ranked by recorded global step, not by path. A training notebook's output holds
-# `_dryrun/best.pt` from the 30-second plumbing check next to the real run's checkpoint,
-# and `_` sorts before every letter -- so picking the first path by name evaluates a
-# five-step model and prints it as the result, with nothing in the log to say so.
+# Which run to evaluate. Candidates are ranked by recorded global step rather than by
+# path, because a training notebook's output holds `_dryrun/best.pt` from the 30-second
+# plumbing check next to the real one and `_` sorts before every letter -- picking by name
+# evaluates a five-step model and says nothing about it.
+#
+# Step count is the wrong tie-break for a short control run, though: `ckpt_gate2` stops at
+# step 8000 and will always lose to the 50,800-step pooled model. Name it to override.
+#   ""            the main pooled N=1..5 model
+#   "ckpt_gate2"  the fixed-N=2 control
+ONLY = ""
+
 print("checkpoints visible:")
-CKPT = autodetect_ckpt()
+CKPT = autodetect_ckpt(contains=ONLY or None)
 
 print("\nstore       :", STORE)
 print("test recipes:", RECIPES_TEST)
@@ -130,9 +137,15 @@ if official:
         print("                   in 250 steps, and 28.4 dB with the separation term alone")
         print("  - the data       all five speaker-disjointness audits are zero")
         print()
-        print("  Still open, cheapest first:")
-        print("  1. is the pooled N=1..5 task the difficulty, rather than the pipeline?")
-        print("     Set GATE2 = True in notebook 02. Fixed N=2, ~2.5 GPU-h, decisive.")
+        print("  - the task       gate 2 ran: fixed N=2 reached 7.40 dB val SI-SDR in")
+        print("                   8 epochs where pooled N=1..5 reached 0.50 dB in 38.")
+        print("                   The pooled task and the auxiliary objectives are the")
+        print("                   cost, not the pipeline. Report that as the finding.")
+        print()
+        print("  Still open, if you have quota to spend:")
+        print("  1. the objectives cost 8.7 dB at matched steps in the single-batch")
+        print("     ablation. A pooled rerun with loss.w_sil lowered would price that")
+        print("     on the real task. About 11 GPU-h.")
         print("  2. is part of the mask head dead, the way the counting head was?")
         print("     python scripts/13_inspect_separator.py --ckpt <this checkpoint>")
 else:

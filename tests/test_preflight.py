@@ -90,6 +90,37 @@ def test_an_explicit_path_is_honoured() -> None:
     assert autodetect_ckpt(hint, roots=[root], verbose=False) == os.path.normpath(hint)
 
 
+def test_a_named_run_beats_the_furthest_along_one() -> None:
+    """A short control run must be selectable, or it can never be evaluated.
+
+    `ckpt_gate2` stops at step 8000 by design and will always lose on step count to the
+    50,800-step pooled model it exists to be compared against.
+    """
+    from _common import autodetect_ckpt
+
+    root = tempfile.mkdtemp(prefix="csnet-only-")
+    _fake_run(root, "ckpt_count", step=50800, epoch=50)
+    wanted = _fake_run(root, "ckpt_gate2", step=8000, epoch=8)
+
+    assert "ckpt_count" in autodetect_ckpt(roots=[root], verbose=False)
+    picked = autodetect_ckpt(roots=[root], verbose=False, contains="ckpt_gate2")
+    assert os.path.dirname(picked) == wanted, picked
+
+
+def test_an_unmatched_filter_says_what_is_there() -> None:
+    """"no checkpoint found" is useless; naming the directories that exist is not."""
+    from _common import autodetect_ckpt
+
+    root = tempfile.mkdtemp(prefix="csnet-miss-")
+    _fake_run(root, "ckpt_count", step=50800, epoch=50)
+    try:
+        autodetect_ckpt(roots=[root], verbose=False, contains="ckpt_nope")
+    except SystemExit as exc:
+        assert "ckpt_count" in str(exc), exc
+    else:
+        raise AssertionError("an unmatched filter must not silently fall back")
+
+
 def test_search_does_not_descend_into_a_corpus() -> None:
     """The store search prunes ``s1``/``mix_both``; so must this one, or it walks 14k files."""
     from _common import _find_files
