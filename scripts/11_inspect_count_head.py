@@ -42,6 +42,10 @@ def main() -> int:
     ap.add_argument("--recipes_dev", default=None)
     ap.add_argument("--batches", type=int, default=8)
     ap.add_argument("--batch_size", type=int, default=12)
+    ap.add_argument("--device", default="auto")
+    ap.add_argument("--compare_precision", action="store_true",
+                    help="run the same batches in fp32 and fp16 autocast and "
+                         "report where they diverge. Needs a GPU.")
     args = ap.parse_args()
 
     import torch
@@ -94,11 +98,12 @@ def main() -> int:
     handles = [head.fc1.register_forward_hook(grab("fc1")),
                head.fc2.register_forward_hook(grab("fc2"))]
 
-    labels, preds = [], []
+    labels, preds, batches = [], [], []
     with torch.no_grad():
         for i, batch in enumerate(loader):
             if i >= args.batches:
                 break
+            batches.append(batch)
             out = model(batch["mix"])
             preds.append(out["count_logits"].argmax(dim=-1).cpu().numpy())
             labels.append(batch["cls"].cpu().numpy())
@@ -140,6 +145,49 @@ def main() -> int:
         n_true = int((labels == cls).sum())
         n_pred = int((preds == cls).sum())
         print(f"  N={cfg.data.n_list[cls]}   true {n_true:4d}   predicted {n_pred:4d}")
+
+    # ------------------------------------------------------- precision divergence
+    if args.compare_precision:
+        from csnet.utils import pick_device
+
+        device = pick_device(None if args.device == "auto" else args.device)
+        if device.type != "cuda":
+            print()
+            print("--compare_precision needs a GPU; autocast does nothing on CPU.")
+        else:
+            model.to(device)
+            captured.clear()
+            handles = [head.fc1.register_forward_hook(grab("fc1")),
+                       head.fc2.register_forward_hook(grab("fc2"))]
+            amp_preds = []
+            with torch.no_grad():
+                for batch in batches:
+                    with torch.amp.autocast(device_type="cuda", dtype=torch.float16):
+                        out = model(batch["mix"].to(device))
+                    amp_preds.append(out["count_logits"].argmax(dim=-1).cpu().numpy())
+            for handle in handles:
+                handle.remove()
+            a_pooled = torch.cat([a for a, _ in captured["fc1"]]).float().cpu().numpy()
+            a_logits = torch.cat([b for _, b in captured["fc2"]]).float().cpu().numpy()
+            amp_preds = np.concatenate(amp_preds)
+
+            banner("precision divergence")
+            spread = max(1e-9, logit_spread_per_sample)
+            rows = [
+                ["pooled features", f"max |delta| {np.abs(a_pooled - pooled).max():.3e}",
+                 f"{100 * np.abs(a_pooled - pooled).max() / max(1e-9, np.abs(pooled).max()):.1f} % of max"],
+                ["logits", f"max |delta| {np.abs(a_logits - logits).max():.3e}",
+                 f"{100 * np.abs(a_logits - logits).max() / spread:.0f} % of within-sample spread"],
+                ["predictions agreeing", f"{100 * float((amp_preds == preds).mean()):.1f} %", ""],
+                ["accuracy fp32", f"{100 * float((preds == labels).mean()):.1f} %", ""],
+                ["accuracy fp16", f"{100 * float((amp_preds == labels).mean()):.1f} %", ""],
+            ]
+            print(format_table(rows, ["quantity", "fp16 vs fp32", "relative"]))
+            print()
+            print("fp32 predicts:", {int(cfg.data.n_list[c]): int((preds == c).sum())
+                                     for c in sorted(set(preds.tolist()))})
+            print("fp16 predicts:", {int(cfg.data.n_list[c]): int((amp_preds == c).sum())
+                                     for c in sorted(set(amp_preds.tolist()))})
 
     # ---------------------------------------------------------------- verdict
     banner("verdict")

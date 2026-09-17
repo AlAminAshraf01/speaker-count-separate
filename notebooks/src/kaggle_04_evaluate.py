@@ -160,6 +160,20 @@ else:
     print("gate 2 not run - attach the libri2mix-8khz-min dataset to enable it")
 
 # %% [markdown]
+# ## Why the counting head does what it does
+#
+# One minute, no training. Run it whenever the counting number looks wrong -- and it does:
+# in fp32 this head answers "1 speaker" for almost every mixture, and the 44.9 % it scores
+# under fp16 autocast is a different function of the same weights. This prints where the
+# two arithmetic paths part company: at the pooled statistics, or only at the logits.
+
+# %%
+RECIPES_DEV = find_recipes("recipes_dev.csv", STORE)
+run(f"python scripts/11_inspect_count_head.py"
+    f" --ckpt {CKPT} --store {STORE} --recipes_dev {RECIPES_DEV}"
+    f" --batches 16 --batch_size 12 --compare_precision")
+
+# %% [markdown]
 # ## Honesty checklist for the write-up
 #
 # Copy these into the limitations section, as prose:

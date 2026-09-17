@@ -338,6 +338,27 @@ per-N SI-SDRi on our own test set is only defined where its untrained head happe
 guess right. Use the official row for it, and the pooled model for everything about
 counting.
 
+### The counting head only works under fp16
+
+Measured 2026-09-17 on `ckpt_count`, one checkpoint, one frozen set, `--compare_precision`:
+
+| | counting accuracy |
+|---|---|
+| fp16 autocast | 44.93 % |
+| fp32 | **20.00 %** (chance, on a balanced set) |
+| predictions agreeing | **16.1 %** |
+
+In fp32 it answers "1 speaker" for 1,445 of 1,500 mixtures, and N=1 for all 300 official
+Libri2Mix files. 20.00 % is not "worse", it is exactly what a constant predictor scores
+here. The naive level-based baseline gets 35.0 %.
+
+So the 44.9 % is the model's behaviour in the regime it was trained and validated in, and
+it is not a property of the audio: change the arithmetic and 84 % of the answers change.
+Report the fp32 number, and report the gap as the finding. `scripts/11_inspect_count_head.py
+--compare_precision` shows where the two paths diverge.
+
+Evaluation and in-training validation both run fp32 now, for that reason.
+
 ### Gate 2 is the number that matters
 
 ```
