@@ -97,7 +97,12 @@ cmd = (f"python scripts/06_evaluate.py"
        f" --recipes {RECIPES_TEST}"
        f" --out /kaggle/working/eval"
        f" --batch_size 12"
-       f" --oracle_limit 200")
+       f" --oracle_limit 200"
+       # Evaluation runs in fp32. This also runs the counting pass under fp16 autocast
+       # and prints both, because notebook 05 and this notebook once reported completely
+       # different counting behaviour for one checkpoint and autocast is the only thing
+       # left that differed. One extra forward pass over the test set, about 50 seconds.
+       f" --compare_precision")
 if LIBRI2MIX:
     cmd += f" --libri2mix_dir {LIBRI2MIX} --libri2mix_limit 300"
 run(cmd)

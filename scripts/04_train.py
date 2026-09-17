@@ -350,7 +350,11 @@ def main() -> int:
                 # Validation was where a 3-epoch run died with SIGKILL and no traceback,
                 # so bracket it: if it happens again the log says which side it was on.
                 log_memory(f"epoch {epoch + 1} before val")
-                val_logs = evaluate(model, dev_loader, loss_fn, device, amp=use_amp,
+                # Validation runs in fp32 even when training is AMP. It costs about a
+                # minute an epoch and it is the metric `best.pt` is chosen on; a
+                # checkpoint selected on a number that moves with autocast is not
+                # selected on anything.
+                val_logs = evaluate(model, dev_loader, loss_fn, device, amp=False,
                                     max_batches=cfg.train.val_batches,
                                     max_n_src=cfg.model.max_n_src,
                                     n_list=cfg.data.n_list, mem_guard=mem_guard)

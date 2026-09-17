@@ -118,6 +118,13 @@ def main() -> int:
                     help="official .../Libri2Mix/wav8k/min for the literature-comparable N=2 row")
     ap.add_argument("--libri2mix_limit", type=int, default=300)
     ap.add_argument("--libri2mix_max_seconds", type=float, default=10.0)
+    ap.add_argument("--amp", action="store_true",
+                    help="evaluate under fp16 autocast. Off by default: AMP is a "
+                         "training-speed device, and the metric you report should "
+                         "not depend on it.")
+    ap.add_argument("--compare_precision", action="store_true",
+                    help="run the counting pass twice, fp32 and fp16, and print "
+                         "both. Costs one extra forward pass over the test set.")
     args = ap.parse_args()
 
     from csnet.baselines import (PUBLISHED_REFERENCE, ideal_ratio_mask_sisdri,
@@ -177,12 +184,40 @@ def main() -> int:
         silence_db=cfg.loss.silence_db, label_smoothing=cfg.loss.label_smoothing,
         clamp_si_sdr=cfg.loss.clamp_si_sdr).to(device)
 
-    results = evaluate(model, loader, loss_fn, device, amp=(device.type == "cuda"),
+    use_amp = bool(args.amp) and device.type == "cuda"
+    precision_check: dict = {}
+    results = evaluate(model, loader, loss_fn, device, amp=use_amp,
                        collect=True, max_n_src=cfg.model.max_n_src,
                        n_list=cfg.data.n_list, progress=True)
+    print(f"precision : {'fp16 autocast' if use_amp else 'fp32'}")
+
+    if args.compare_precision and device.type == "cuda":
+        # This evaluation and the interpretability one disagreed completely about
+        # counting on one checkpoint. The two code paths are identical in fp32 -- checked
+        # item by item -- so autocast is the only variable left, and a model whose
+        # predicted counts depend on it is a fact the report needs either way.
+        other = evaluate(model, loader, loss_fn, device, amp=not use_amp, collect=True,
+                         max_n_src=cfg.model.max_n_src, n_list=cfg.data.n_list,
+                         progress=True)
+        agree = float(np.mean([a == b for a, b in zip(results["y_pred"], other["y_pred"])]))
+        banner("precision check")
+        print(f"counting accuracy  fp32 {100 * (results if not use_amp else other)['count_acc']:.2f} %"
+              f"   fp16 {100 * (other if not use_amp else results)['count_acc']:.2f} %")
+        print(f"predictions that agree between the two: {100 * agree:.1f} %")
+        if agree < 0.95:
+            print()
+            print("The counting head's answer depends on arithmetic precision. Report the")
+            print("fp32 number and say so -- a prediction that moves with autocast is not a")
+            print("property of the speaker count.")
+        precision_check = {
+            "fp32_count_acc": (results if not use_amp else other)["count_acc"],
+            "fp16_count_acc": (other if not use_amp else results)["count_acc"],
+            "agreement": agree}
+
     records = results["records"]
     report: dict = {"checkpoint": ckpt_path, "n_test": len(records),
-                    "recipes": facts,
+                    "recipes": facts, "precision": "fp16" if use_amp else "fp32",
+                    "precision_check": precision_check,
                     "config": state.get("cfg", {})}
 
     # ---------------------------------------------------------- 1. counting

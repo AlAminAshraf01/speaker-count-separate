@@ -184,15 +184,20 @@ def ablate_encoder_filters(model: torch.nn.Module,
 
 
 def filter_importance_by_energy(model: torch.nn.Module, loader: Any, device: Any, *,
-                                max_batches: int = 8) -> np.ndarray:
-    """Mean encoder activation per filter -- the ranking used to choose what to ablate."""
+                                max_batches: int | None = 8) -> np.ndarray:
+    """Mean encoder activation per filter -- the ranking used to choose what to ablate.
+
+    ``max_batches=None`` means the whole loader, matching ``collect_mask_records`` and
+    ``evaluate``. A caller that has already sized its subset passes None, and the three
+    functions disagreeing on what None meant crashed a run at the last section.
+    """
     net = getattr(model, "module", model)
     net.eval()
     totals: torch.Tensor | None = None
     seen = 0
     with torch.no_grad():
         for i, batch in enumerate(loader):
-            if i >= int(max_batches):
+            if max_batches is not None and i >= int(max_batches):
                 break
             mix = batch["mix"].to(device)
             out = net(mix, return_internals=True)
