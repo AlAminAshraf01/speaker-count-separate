@@ -36,13 +36,16 @@
 # %%
 import sys
 sys.path.insert(0, os.path.join(REPO, "scripts"))
-from _common import autodetect_store
+from _common import autodetect_store, find_recipes
 import glob
 
 STORE = autodetect_store()
-hits = (glob.glob("/kaggle/input/**/recipes_dev.csv", recursive=True)
-        + glob.glob(os.path.join(REPO, "data", "recipes_dev.csv")))
-RECIPES_DEV = hits[0] if hits else None
+# Not a raw glob: a training notebook's output carries a whole git clone, so
+# `glob("/kaggle/input/**/recipes_dev.csv")[0]` can return the copy committed to
+# the repo instead of the one notebook 00 built -- decided by filesystem walk
+# order, which changes with whatever inputs happen to be attached. Two notebooks
+# then evaluate one checkpoint against two different frozen sets and disagree.
+RECIPES_DEV = find_recipes("recipes_dev.csv", STORE)
 
 print("store      :", STORE)
 print("dev recipes:", RECIPES_DEV)

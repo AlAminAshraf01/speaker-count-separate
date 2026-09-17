@@ -151,27 +151,23 @@ def check_recipes(args, state) -> Row:
     which = PROFILES[args.profile]["recipes"]
     if which is None:
         return "recipes", OK, "not needed for this notebook", ""
+    from _common import describe_recipes, find_recipes
+
     path = resolve(args.recipes_dev if which == "dev" else args.recipes_test)
     if not path or not os.path.exists(path):
-        found = _search_recipes(f"recipes_{which}.csv")
-        path = found[0] if found else None
+        path = find_recipes(f"recipes_{which}.csv", state.get("store"))
     if not path:
         return ("recipes", STOP, f"recipes_{which}.csv not found",
                 "+ Add Input -> Notebook Output -> 00_build_dataset")
-    with open(path, "r", encoding="utf-8") as fh:
-        rows = sum(1 for _ in fh) - 1
+    facts = describe_recipes(path)
     state[f"recipes_{which}"] = path
-    if rows <= 0:
+    if facts["rows"] <= 0:
         return ("recipes", STOP, f"{path} has no rows",
                 "re-run notebook 00; the frozen set is empty")
-    return "recipes", OK, f"{which}: {rows} frozen mixtures", ""
-
-
-def _search_recipes(name: str) -> list[str]:
-    from _common import _find_files
-
-    here = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    return _find_files(["/kaggle/input", os.path.join(here, "data")], name)
+    # The sha is what lets two runs of two notebooks be compared. Reading a different
+    # frozen set produces a different answer for the same checkpoint and says nothing.
+    return ("recipes", OK,
+            f"{which}: {facts['rows']} mixtures {facts['per_n']} sha {facts['sha']}", "")
 
 
 def check_checkpoint(args, state) -> Row:

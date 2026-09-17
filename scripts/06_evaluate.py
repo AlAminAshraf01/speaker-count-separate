@@ -27,7 +27,8 @@ import sys
 import numpy as np
 import torch
 
-from _common import add_common_args, banner, build_store_and_bank, require_store, resolve, use_agg
+from _common import (add_common_args, banner, build_store_and_bank, describe_recipes,
+                     find_recipes, require_store, resolve, use_agg)
 
 
 def evaluate_official_libri2mix(model, libri_dir, split, device, limit, max_seconds,
@@ -154,6 +155,11 @@ def main() -> int:
     print(f"  {model.describe()}")
 
     recipes_path = resolve(args.recipes) or args.recipes
+    if not os.path.isfile(recipes_path):
+        recipes_path = find_recipes(os.path.basename(recipes_path), store_root) or recipes_path
+    facts = describe_recipes(recipes_path)
+    print(f"recipes   : {facts['path']}")
+    print(f"            {facts['rows']} mixtures {facts['per_n']}  sha {facts['sha']}")
     store, bank = build_store_and_bank(store_root, args.split, mmap=cfg.data.mmap,
                                        noise_store=cfg.data.noise_store,
                                        noise_kinds=cfg.data.noise_kinds,
@@ -176,6 +182,7 @@ def main() -> int:
                        n_list=cfg.data.n_list, progress=True)
     records = results["records"]
     report: dict = {"checkpoint": ckpt_path, "n_test": len(records),
+                    "recipes": facts,
                     "config": state.get("cfg", {})}
 
     # ---------------------------------------------------------- 1. counting

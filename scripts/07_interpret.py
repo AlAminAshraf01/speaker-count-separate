@@ -26,7 +26,10 @@ import sys
 import numpy as np
 import torch
 
-from _common import add_common_args, banner, build_store_and_bank, require_store, resolve, use_agg
+from typing import Any
+
+from _common import (add_common_args, banner, build_store_and_bank, describe_recipes,
+                     find_recipes, require_store, resolve, use_agg)
 
 
 def main() -> int:
@@ -76,10 +79,43 @@ def main() -> int:
                                        noise_store=cfg.data.noise_store,
                                        noise_kinds=cfg.data.noise_kinds,
                                        noise_weights=cfg.data.noise_weights)
-    dataset = FrozenMixDataset(store, bank, resolve(args.recipes) or args.recipes,
+    recipes_path = resolve(args.recipes) or args.recipes
+    if not os.path.isfile(recipes_path):
+        recipes_path = find_recipes(os.path.basename(recipes_path), store_root) or recipes_path
+    facts = describe_recipes(recipes_path)
+    print(f"recipes   : {facts['path']}")
+    print(f"            {facts['rows']} mixtures {facts['per_n']}  sha {facts['sha']}")
+
+    dataset = FrozenMixDataset(store, bank, recipes_path,
                                seg_len=seg_len(cfg), max_n_src=cfg.model.max_n_src)
-    loader = build_loader(dataset, batch_size=args.batch_size, shuffle=False, num_workers=0)
-    report: dict = {"checkpoint": ckpt_path}
+
+    def stratified(budget_batches: int) -> Any:
+        """An equal share of every speaker count, in a fixed order.
+
+        The frozen set is **sorted by N**, so reading it in order under a batch budget
+        makes the whole "as a function of N" study look at only the first one or two
+        values of N. At the previous defaults that was 300 mixtures of N=1 and 180 of
+        N=2 out of 1500 -- and the miscount table then compared N=1 against N=2 while
+        labelling the columns "correct" and "wrong". Shuffling would fix the coverage
+        and lose reproducibility; taking a fixed equal share fixes both.
+        """
+        wanted = max(1, int(budget_batches) * int(args.batch_size))
+        by_n: dict[int, list[int]] = {}
+        for i, recipe in enumerate(dataset.recipes):
+            by_n.setdefault(int(recipe["n_src"]), []).append(i)
+        per_class = max(1, wanted // max(1, len(by_n)))
+        picked = [i for n in sorted(by_n) for i in by_n[n][:per_class]]
+        return torch.utils.data.Subset(dataset, picked)
+
+    subset = stratified(args.max_batches)
+    ablate_subset = stratified(args.ablate_batches)
+    loader = build_loader(subset, batch_size=args.batch_size, shuffle=False, num_workers=0)
+    ablate_loader = build_loader(ablate_subset, batch_size=args.batch_size, shuffle=False,
+                                 num_workers=0)
+    print(f"analysing : {len(subset)} mixtures, {len(ablate_subset)} of them for ablation "
+          f"(equal share of each N)")
+    report: dict = {"checkpoint": ckpt_path, "recipes": facts,
+                    "n_analysed": len(subset), "n_ablated": len(ablate_subset)}
 
     def save(fig, name: str) -> None:
         path = os.path.join(out_dir, name)
@@ -129,8 +165,8 @@ def main() -> int:
 
     # ------------------------------------------------------------ 2. mask geometry
     banner("2 - mask geometry as a function of N")
-    records = collect_mask_records(model, loader, device, max_batches=args.max_batches,
-                                  max_n_src=cfg.model.max_n_src)
+    records = collect_mask_records(model, loader, device, max_batches=None,
+                                   max_n_src=cfg.model.max_n_src)
     keys = ["sparsity_hoyer", "sparsity_gini", "overlap_cosine", "overlap_iou",
             "entropy", "active_fraction", "confidence"]
     grouped = group_by_n(records, keys)
@@ -191,8 +227,8 @@ def main() -> int:
 
     # ------------------------------------------------------------ 4. ablation
     banner("4 - which basis functions carry the count?")
-    importance = filter_importance_by_energy(model, loader, device,
-                                             max_batches=args.ablate_batches)
+    importance = filter_importance_by_energy(model, ablate_loader, device,
+                                             max_batches=None)
     ranked = np.argsort(-importance)
     loss_fn = RectangularPITLoss(
         max_n_src=cfg.model.max_n_src, predict_noise=cfg.model.predict_noise,
@@ -205,8 +241,8 @@ def main() -> int:
     for k in args.ablate_steps:
         k = min(int(k), filters.shape[0] - 1)
         with ablate_encoder_filters(model, ranked[:k].tolist()):
-            res = evaluate(model, loader, loss_fn, device, amp=False,
-                           max_batches=args.ablate_batches, max_n_src=cfg.model.max_n_src,
+            res = evaluate(model, ablate_loader, loss_fn, device, amp=False,
+                           max_batches=None, max_n_src=cfg.model.max_n_src,
                            n_list=cfg.data.n_list)
         ablation_rows.append([k, round(100.0 * k / filters.shape[0], 1),
                               round(res["count_acc"] * 100, 2),

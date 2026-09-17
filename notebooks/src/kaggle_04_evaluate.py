@@ -38,14 +38,17 @@
 # %%
 import sys
 sys.path.insert(0, os.path.join(REPO, "scripts"))
-from _common import autodetect_ckpt, autodetect_libri2mix, autodetect_store
+from _common import autodetect_ckpt, autodetect_libri2mix, autodetect_store, find_recipes
 import glob
 
 STORE = autodetect_store()
 LIBRI2MIX = autodetect_libri2mix()
-hits = (glob.glob("/kaggle/input/**/recipes_test.csv", recursive=True)
-        + glob.glob(os.path.join(REPO, "data", "recipes_test.csv")))
-RECIPES_TEST = hits[0] if hits else None
+# Not a raw glob: a training notebook's output carries a whole git clone, so
+# `glob("/kaggle/input/**/recipes_test.csv")[0]` can return the copy committed to
+# the repo instead of the one notebook 00 built -- decided by filesystem walk
+# order, which changes with whatever inputs happen to be attached. Two notebooks
+# then evaluate one checkpoint against two different frozen sets and disagree.
+RECIPES_TEST = find_recipes("recipes_test.csv", STORE)
 
 # Which run to evaluate. Candidates are ranked by recorded global step rather than by
 # path, because a training notebook's output holds `_dryrun/best.pt` from the 30-second

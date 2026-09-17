@@ -135,6 +135,53 @@ def test_search_does_not_descend_into_a_corpus() -> None:
     assert os.path.basename(os.path.dirname(found[0])) == "ckpt", found
 
 
+def test_recipes_are_not_taken_from_a_nested_clone() -> None:
+    """A training notebook's output carries a whole git clone of this repo.
+
+    ``glob("/kaggle/input/**/recipes_test.csv")[0]`` can therefore return the copy
+    committed to the repo rather than the one the data notebook built, decided by
+    filesystem walk order. Two notebooks then score one checkpoint against two different
+    frozen sets and neither log says so.
+    """
+    from _common import find_recipes
+
+    root = tempfile.mkdtemp(prefix="csnet-recipes-")
+    nested = os.path.join(root, "kaggle-02-train", "speaker-count-separate", "data")
+    beside = os.path.join(root, "kaggle-00-build-dataset")
+    body = "\n".join(["mix_id,n_src", "x,1", ""])
+    for directory in (nested, beside):
+        os.makedirs(directory, exist_ok=True)
+        with io.open(os.path.join(directory, "recipes_test.csv"), "w", encoding="utf-8") as fh:
+            fh.write(body)
+
+    picked = find_recipes("recipes_test.csv", beside)
+    assert os.path.dirname(picked) == beside, picked
+
+
+def test_the_recipe_fingerprint_notices_a_different_file() -> None:
+    """Same row count, different content: only the hash tells them apart."""
+    from _common import describe_recipes
+
+    root = tempfile.mkdtemp(prefix="csnet-sha-")
+    a = os.path.join(root, "a.csv")
+    b = os.path.join(root, "b.csv")
+    lines = ["mix_id,n_src", "x,1", "y,2", ""]
+    with io.open(a, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(lines))
+    with io.open(b, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("\n".join(["mix_id,n_src", "x,1", "y,3", ""]))
+
+    fa, fb = describe_recipes(a), describe_recipes(b)
+    assert fa["rows"] == fb["rows"] == 2
+    assert fa["sha"] != fb["sha"], (fa, fb)
+    assert fa["per_n"] == {1: 1, 2: 1}, fa
+    # CRLF is not a different frozen set -- this repo has been bitten by that before.
+    crlf = os.path.join(root, "c.csv")
+    with open(crlf, "wb") as fh:
+        fh.write("\r\n".join(lines).encode("utf-8"))
+    assert describe_recipes(crlf)["sha"] == fa["sha"]
+
+
 # ------------------------------------------------------------------ individual checks
 
 def _args(**kwargs) -> argparse.Namespace:

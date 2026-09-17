@@ -120,6 +120,52 @@ def autodetect_store(hint: str | None = None) -> str | None:
     return _search(["/kaggle/input"], _looks_like_store)
 
 
+def describe_recipes(path: str) -> dict:
+    """Row count, per-N counts and a content hash for one frozen recipe file.
+
+    Printed by everything that reads a frozen set. Two scripts silently reading two
+    different ``recipes_test.csv`` files produce two sets of numbers for one checkpoint
+    and nothing in either log says why, which is exactly what happened between the
+    evaluation and the interpretability notebooks.
+    """
+    import csv
+    import hashlib
+
+    with open(path, "rb") as fh:
+        digest = hashlib.sha256(fh.read().replace(b"\r\n", b"\n")).hexdigest()[:16]
+    with open(path, "r", encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    per_n: dict[int, int] = {}
+    for row in rows:
+        n = int(row.get("n_src", 0))
+        per_n[n] = per_n.get(n, 0) + 1
+    return {"path": path, "sha": digest, "rows": len(rows),
+            "per_n": dict(sorted(per_n.items()))}
+
+
+def find_recipes(name: str, store_root: str | None = None) -> str | None:
+    """Locate a frozen recipe file, preferring the one beside the packed store.
+
+    ``glob("/kaggle/input/**/recipes_test.csv")[0]`` picks whatever the filesystem walk
+    reaches first, and a training notebook's output contains a whole git clone -- so the
+    copy committed to the repo can win over the one the data notebook actually built,
+    depending only on which inputs happen to be attached. Prefer the store's sibling,
+    never a copy nested inside a clone, and sort what is left so the answer is stable.
+    """
+    if store_root:
+        for candidate in (os.path.join(store_root, name),
+                          os.path.join(os.path.dirname(store_root), name)):
+            if os.path.isfile(candidate):
+                return os.path.normpath(candidate)
+    found = _find_files(["/kaggle/input"], name)
+    outside = [p for p in found if "speaker-count-separate" not in p.replace("\\", "/")]
+    for group in (outside, found):
+        if group:
+            return os.path.normpath(sorted(group)[0])
+    local = os.path.join(REPO_ROOT, "data", name)
+    return local if os.path.isfile(local) else None
+
+
 CKPT_ROOTS = ("/kaggle/working", "/kaggle/input")
 
 
