@@ -188,7 +188,7 @@ def _args(**kwargs) -> argparse.Namespace:
     base = dict(profile="train", config=None, overrides=None, store=None,
                 recipes_dev=None, recipes_test=None, ckpt_dir=None, epochs=None,
                 extra_epochs=None, time_budget_h=None, ms_per_step=None,
-                cells_src=None, cells_sha=None, strict=False)
+                cells_src=None, cells_sha=None, strict=False, resume_contains=None)
     base.update(kwargs)
     return argparse.Namespace(**base)
 

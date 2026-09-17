@@ -46,7 +46,7 @@ Full step-by-step with every click: **[docs/KAGGLE_RUNBOOK.md](docs/KAGGLE_RUNBO
 speaker-count-separate/
 ├── README.md                    ← you are here
 ├── requirements.txt             everything is preinstalled on Kaggle
-├── configs/                     base · paper · small · tiny · search
+├── configs/                     base · paper · small · tiny · search · gate2 · silow
 ├── src/csnet/                   the library
 │   ├── constants.py             8 kHz, 3 s, 5 slots, −30 dB silence floor
 │   ├── audio.py                 levels, int16 packing, resampling, STFT

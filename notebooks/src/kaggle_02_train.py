@@ -202,6 +202,40 @@ print("\ncheckpoints visible from a previous session:", previous or "none (first
 # single-batch ablation above already measured the objectives at -8.7 dB and this puts a
 # number on the rest of it.
 #
+# ## Pricing the objectives on the real task -- `SILOW`
+#
+# Gate 2 answered "is the pipeline broken?" with a run that moved two things at once: it
+# dropped to a single speaker count *and* switched three objectives off. The fifteenfold is
+# real but unattributed -- the pooled task and the auxiliary objectives are both inside it,
+# so the report can only say "and/or", which is the weakest form a finding can take.
+#
+# `SILOW = True` moves one of them on its own. `configs/silow.yaml` is `paper.yaml` with
+# the silence weight cut tenfold, 1.0 -> 0.1: the same pooled N=1..5 mixtures, the same
+# counting term, the same 38 epochs against the same dev set. Whatever it gains over
+# 0.50 dB is the silence term's price on the real task, measured rather than extrapolated
+# from four memorised mixtures.
+#
+# Why that term and not one of the others: the silence penalty is not scale-invariant and
+# SI-SDR is, so shrinking every slot at once drives the penalty to zero while leaving
+# separation untouched. `14_objective_ablation.py` watched it reach 0.000 inside a hundred
+# steps with separation nine decibels behind. It is the term with a free descent direction,
+# which makes it the one worth a run.
+#
+# | | epochs | GPU-h | val SI-SDR |
+# |---|---|---|---|
+# | pooled, `w_sil` 1.0 -- the reference | 38 | ~13.5 | 0.50 dB |
+# | pooled, `w_sil` 0.1 -- this run | 38 | ~12 | ? |
+# | fixed N=2, no silence term at all | 8 | 2.5 | 7.40 dB |
+#
+# **Two sessions**, 11 h then about 1.2 h, then notebook 04 with `ONLY = "ckpt_silow"`.
+# Roughly 12.5 GPU-h of the weekly 30. The second session is what buys matched epochs, and
+# matched epochs are the comparison: `--set train.epochs=35` fits one session, but then the
+# result has to be reported as 35 against 38, which is a weaker claim than it looks.
+#
+# **It will not fix counting.** The count head reads pooled statistics that this knob does
+# not touch, and in fp32 it answers "1 speaker" to almost every mixture. If the counting
+# row moves, suspect the measurement before believing it.
+#
 # Two things in that run's log are expected, not faults. `w_count` is zero, so the
 # counting head is untrained by design and its accuracy is noise -- the collapse warning
 # no longer fires when counting is switched off. And `lr 0.00e+00` at the end is the
@@ -214,18 +248,37 @@ BATCH_SIZE = 12          # drop to 8 if you hit CUDA OOM
 TIME_BUDGET_H = 11.0     # stop cleanly before Kaggle's 12 h cap
 STEPS_PER_EPOCH = 1000
 
-# The two switches that change what this notebook does. They live here, above everything
-# that reads them, because CKPT_DIR depends on RECOVER: the recovery run writes to its own
-# directory, and a progress plot pointed at the other one silently shows nothing.
+# The switches that change what this notebook does. They live here, above everything that
+# reads them, because CKPT_DIR depends on them: each variant writes to its own directory,
+# and a progress plot pointed at another one silently shows nothing. Set at most one.
 RECOVER = False          # True: keep the separator, re-init the counting head, train it alone
-GATE2 = False            # True: the fixed-N=2 control run, ~2.5 h -- see "Gate 2" below
+GATE2 = False            # True: the fixed-N=2 control run, ~2.5 h -- see "Gate 2" above
+SILOW = False            # True: pooled rerun at w_sil 0.1, ~12 h -- see "Pricing" above
 BISECT = False           # True: spend ~15 min finding which component leaks, and train nothing
 EXTRA_EPOCHS = 12        # RECOVER only: this many MORE epochs, counted from the checkpoint
 
+assert sum([RECOVER, GATE2, SILOW, BISECT]) <= 1, "these are alternatives, not a stack"
+
 CKPT_DIR = ("/kaggle/working/ckpt_gate2" if GATE2 else
+            "/kaggle/working/ckpt_silow" if SILOW else
             "/kaggle/working/ckpt_count" if RECOVER else
             "/kaggle/working/ckpt")
+RUN_CONFIG = ("configs/gate2.yaml" if GATE2 else
+              "configs/silow.yaml" if SILOW else CONFIG)
+
+# Which attached run this one may resume from. GATE2 and SILOW are separate experiments
+# that begin at step 0, so their session-two resume has to be pinned to their own
+# directory: find_resume ranks by global step, and the pooled reference at 50,800 steps
+# beats anything either of them will reach. Unpinned, session two of SILOW would continue
+# the reference model under a loss its weights were never grown with -- eleven hours spent
+# making the one comparison this run exists to avoid. RECOVER stays unpinned on purpose:
+# resuming *from* the pooled run into a fresh directory is what it is for.
+RESUME_CONTAINS = os.path.basename(CKPT_DIR) if (GATE2 or SILOW) else ""
+
 print("writing to :", CKPT_DIR)
+print("config     :", RUN_CONFIG)
+print("resume from:", f"attached paths containing {RESUME_CONTAINS!r}"
+      if RESUME_CONTAINS else "any attached checkpoint (furthest along wins)")
 
 # %% [markdown]
 # ## Preflight (30 seconds, no quota)
@@ -240,10 +293,14 @@ print("writing to :", CKPT_DIR)
 
 # %%
 run(f"python scripts/12_preflight.py --for {'recover' if RECOVER else 'train'}"
-    f" --config {'configs/gate2.yaml' if GATE2 else CONFIG} --store {STORE}"
+    f" --config {RUN_CONFIG} --store {STORE}"
     f" --recipes_dev {RECIPES_DEV}"
     f" --ckpt_dir {CKPT_DIR} --time_budget_h {TIME_BUDGET_H}"
-    + (f" --extra_epochs {EXTRA_EPOCHS}" if RECOVER else "" if GATE2 else f" --epochs {EPOCHS}")
+    # GATE2 and SILOW carry their epoch count in the config, so passing --epochs here would
+    # override it with the pooled default and check an epoch range nothing is going to run.
+    + (f" --extra_epochs {EXTRA_EPOCHS}" if RECOVER else
+       "" if GATE2 or SILOW else f" --epochs {EPOCHS}")
+    + (f" --resume_contains {RESUME_CONTAINS}" if RESUME_CONTAINS else "")
     + f" --cells_src {CELLS_SRC} --cells_sha {CELLS_SHA}"
     f" --set train.batch_size={BATCH_SIZE} train.steps_per_epoch={STEPS_PER_EPOCH}")
 
@@ -253,7 +310,7 @@ run(f"python scripts/12_preflight.py --for {'recover' if RECOVER else 'train'}"
 # Five steps and one eval batch. Never spend an hour of quota discovering that a path is wrong.
 
 # %%
-run(f"python scripts/04_train.py --config {CONFIG}"
+run(f"python scripts/04_train.py --config {RUN_CONFIG}"
     f" --store {STORE} --recipes_dev {RECIPES_DEV}"
     f" --ckpt_dir /kaggle/working/_dryrun --resume none --dry_run")
 
@@ -284,9 +341,25 @@ elif GATE2:
         f" --recipes_dev {RECIPES_DEV}"
         f" --ckpt_dir {CKPT_DIR}"
         f" --dev_n 2"
-        f" --resume auto"
+        f" --resume auto --resume_contains {RESUME_CONTAINS}"
         f" --time_budget_h {TIME_BUDGET_H}"
         f" --best_metric neg_loss"
+        f" --set train.batch_size={BATCH_SIZE}"
+        f" train.steps_per_epoch={STEPS_PER_EPOCH}")
+elif SILOW:
+    # One knob away from the pooled reference: the silence weight, 1.0 -> 0.1. Same five
+    # speaker counts, same counting term, same 38 epochs, so the gap in val SI-SDR is the
+    # silence term's price on the real task rather than on one memorised batch. `p_si_snr`
+    # is the metric the reference was scored on; read `val_sisdr` in the table below for
+    # the comparison itself, because P-SI-SNR also carries the counting head's failures.
+    run(f"python scripts/04_train.py"
+        f" --config configs/silow.yaml"
+        f" --store {STORE}"
+        f" --recipes_dev {RECIPES_DEV}"
+        f" --ckpt_dir {CKPT_DIR}"
+        f" --resume auto --resume_contains {RESUME_CONTAINS}"
+        f" --time_budget_h {TIME_BUDGET_H}"
+        f" --best_metric p_si_snr"
         f" --set train.batch_size={BATCH_SIZE}"
         f" train.steps_per_epoch={STEPS_PER_EPOCH}")
 elif RECOVER:

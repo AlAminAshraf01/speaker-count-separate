@@ -59,6 +59,9 @@ RECIPES_TEST = find_recipes("recipes_test.csv", STORE)
 # step 8000 and will always lose to the 50,800-step pooled model. Name it to override.
 #   ""            the main pooled N=1..5 model
 #   "ckpt_gate2"  the fixed-N=2 control
+#   "ckpt_silow"  the pooled rerun at w_sil 0.1 -- also shorter than the reference, so it
+#                 also has to be named; "" would quietly evaluate the reference instead
+#                 and the two runs would look identical
 ONLY = ""
 
 print("checkpoints visible:")
@@ -152,8 +155,11 @@ if official:
         print()
         print("  Still open, if you have quota to spend:")
         print("  1. the objectives cost 8.7 dB at matched steps in the single-batch")
-        print("     ablation. A pooled rerun with loss.w_sil lowered would price that")
-        print("     on the real task. About 11 GPU-h.")
+        print("     ablation, and gate 2 moved the task and the objective together, so")
+        print("     neither number is attributable. configs/silow.yaml moves one: pooled")
+        print("     N=1..5 at w_sil 0.1 instead of 1.0, same 38 epochs. SILOW = True in")
+        print("     notebook 02, two sessions, ~12 GPU-h, then come back here with")
+        print("     ONLY = \"ckpt_silow\" and compare this table against the reference.")
         print("  2. is part of the mask head dead, the way the counting head was?")
         print("     python scripts/13_inspect_separator.py --ckpt <this checkpoint>")
 else:

@@ -41,6 +41,8 @@ from _common import autodetect_ckpt, autodetect_store
 #   ""            the main pooled N=1..5 model
 #   "ckpt_count"  the same thing, pinned
 #   "ckpt_gate2"  the fixed-N=2 control -- separation only, counting is untrained
+#   "ckpt_silow"  the pooled rerun at w_sil 0.1 -- a fair demo subject, though its spare
+#                 slots were only weakly penalised, so expect more leakage into them
 ONLY = ""
 
 print("checkpoints visible:")

@@ -247,12 +247,17 @@ def main() -> int:
         ablation_rows.append([k, round(100.0 * k / filters.shape[0], 1),
                               round(res["count_acc"] * 100, 2),
                               round(res["p_si_snr"], 2),
+                              round(res.get("sisdri_oracle", float("nan")), 2),
                               round(res["sisdri_count_correct"], 2)])
         print(f"  zeroed top {k:4d} filters ({100.0 * k / filters.shape[0]:5.1f} %): "
-              f"count {res['count_acc'] * 100:5.2f} %   P-SI-SNR {res['p_si_snr']:7.2f} dB")
+              f"count {res['count_acc'] * 100:5.2f} %   "
+              f"SI-SDRi(oracle) {res.get('sisdri_oracle', float('nan')):6.2f} dB")
     print()
+    # P-SI-SNR and SI-SDRi(cc) are both gated on the predicted count, so a head that
+    # answers the same class every time flattens them into a statement about one N.
+    # SI-SDRi(oracle) uses the true count and is the column to read here.
     print(format_table(ablation_rows, ["filters zeroed", "% of basis", "count acc %",
-                                       "P-SI-SNR", "SI-SDRi(cc)"]))
+                                       "P-SI-SNR", "SI-SDRi(oracle)", "SI-SDRi(cc)"]))
     report["ablation"] = ablation_rows
 
     fig, ax = plt.subplots(figsize=(6, 3.6))

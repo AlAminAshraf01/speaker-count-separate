@@ -1,0 +1,60 @@
+# The pooled rerun that prices the silence term on the *real* task.
+#
+# Two measurements already bracket this question and neither one answers it:
+#
+#   scripts/14_objective_ablation.py   one fixed batch, 250 steps: 28.36 dB with the
+#                                      separation term alone against 19.66 dB with the full
+#                                      production loss. An 8.7 dB tax -- measured on four
+#                                      mixtures the model sees every single step.
+#   configs/gate2.yaml                 fixed N=2, no counting and no silence term, 8 epochs:
+#                                      7.40 dB val SI-SDR where the pooled run reached
+#                                      0.50 dB in 38. But that run moved *two* things at
+#                                      once, the objective and the task, so it cannot say
+#                                      which of them the fifteenfold belongs to.
+#
+# This config moves one. Everything is `paper.yaml` -- pooled N = 1..5, the counting term
+# still on, the same 38 epochs against the same dev set -- except the silence weight:
+#
+#   w_sil 1.0 -> 0.1    The silence penalty is not scale-invariant and SI-SDR is, so
+#                       shrinking every slot at once drives the penalty to zero at no cost
+#                       to separation. That is a free descent direction which teaches the
+#                       model nothing about which slot ought to be quiet, and the ablation
+#                       watched it reach 0.000 inside a hundred steps while separation sat
+#                       nine decibels behind. Tenfold rather than zero: at zero the surplus
+#                       slots are unconstrained, the model's own notion of N stops being
+#                       readable, and a second axis moves. `--set loss.w_sil=0.0` runs that
+#                       arm too if the tenfold cut turns out to be too small to see.
+#
+# Budget: 38 epochs at ~19 min each is about 12 GPU-h, so two sessions (11 h + ~1.2 h).
+# Matched epochs are worth more than the saved hour, because the number being compared
+# against was measured at 38. For a single session instead, `--set train.epochs=35` -- and
+# then say "35 epochs" beside the result, not "38".
+#
+#   python scripts/04_train.py --config configs/silow.yaml --store ... \
+#       --ckpt_dir /kaggle/working/ckpt_silow --resume auto --resume_contains ckpt_silow \
+#       --best_metric p_si_snr
+#
+# `--resume_contains` is not optional here. The pooled reference checkpoint is 50,800 steps
+# and this one starts at zero; `find_resume` ranks by step, so without the filter session
+# two of this run silently continues the *reference* model instead -- under a loss its
+# weights were never grown with, which is the one comparison this config exists to avoid.
+#
+# Reading it, against the pooled reference at 0.50 dB val SI-SDR and +1.2 dB test SI-SDRi:
+#
+#   clearly above    the silence term was a real tax on the real task. The report prices it
+#                    with a number of its own instead of extrapolating from one batch.
+#   about the same   the tax is an artefact of the single-batch setup, and the pooled
+#                    five-count task is the whole cost. Gate 2 said that; this confirms it
+#                    on the axis gate 2 left confounded.
+#
+# Either outcome is a result. Neither will move the counting number: the count head reads
+# pooled statistics that this knob does not touch, and in fp32 it answers "1 speaker" to
+# almost everything. Do not spend this run hoping for a counting result.
+_base_: paper.yaml
+name: csnet-silow
+
+train:
+  epochs: 38
+
+loss:
+  w_sil: 0.1

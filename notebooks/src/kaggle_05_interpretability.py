@@ -53,6 +53,9 @@ RECIPES_TEST = find_recipes("recipes_test.csv", STORE)
 #   ""            the main pooled N=1..5 model
 #   "ckpt_count"  the same thing, pinned
 #   "ckpt_gate2"  the fixed-N=2 control
+#   "ckpt_silow"  the pooled rerun at w_sil 0.1 -- also pooled, so mask geometry versus N
+#                 is readable here too, and comparing the two sets of masks is the
+#                 interpretability half of what that run bought
 ONLY = ""
 
 print("checkpoints visible:")
@@ -143,7 +146,10 @@ display(pd.DataFrame(report["miscount_signature"],
 display(Image("/kaggle/working/interpret/filter_ablation.png"))
 display(pd.DataFrame(report["ablation"],
                      columns=["filters zeroed", "% of basis", "count acc %",
-                              "P-SI-SNR", "SI-SDRi(cc)"]))
+                              "P-SI-SNR", "SI-SDRi(oracle)", "SI-SDRi(cc)"]))
+print("Read SI-SDRi(oracle): it uses the true N. P-SI-SNR and SI-SDRi(cc) are both gated")
+print("on the predicted count, so a head that answers one class every time turns them into")
+print("a statement about that one class rather than about the filters.")
 
 # %% [markdown]
 # ## Writing this up
@@ -159,6 +165,13 @@ display(pd.DataFrame(report["ablation"],
 #   output slot is a mechanistic failure explanation.
 # * **If ablation hurts counting faster than separation** (or the reverse) - report which, and
 #   note that it localises the count decision in the basis.
+# * **If the counting column does not move at all**, check whether the head is answering the
+#   same class for every input before reading anything into it. Ablating filters cannot
+#   change an accuracy that is already pinned by a constant output, so a flat column there
+#   means the question is unanswerable for this checkpoint, not that the count is spread
+#   evenly across the basis. The same goes for the miscount signature: if every correctly
+#   counted mixture is N=1, its overlap column is NaN because overlap needs a pair, and the
+#   comparison is between speaker counts rather than between right and wrong.
 # * **If a correlation is weak or a trend is flat, say so.** A null result here is still a
 #   measurement of the network's internals, which is more than an assertion. Do not
 #   over-claim: with a few hundred utterances, r = 0.1 is noise.

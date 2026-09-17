@@ -231,7 +231,7 @@ def check_epochs(args, state) -> Row:
     from csnet.checkpoint import find_resume
 
     work = resolve(args.ckpt_dir) or cfg.train.ckpt_dir
-    resume = find_resume("auto", work_dir=work)
+    resume = find_resume("auto", work_dir=work, contains=args.resume_contains)
     start = 0
     if resume:
         step = dict(state.get("ckpt_rank") or []).get(resume, -1)
@@ -332,6 +332,11 @@ def main() -> int:
     ap.add_argument("--recipes_dev", default=None)
     ap.add_argument("--recipes_test", default=None)
     ap.add_argument("--ckpt_dir", default=None)
+    ap.add_argument("--resume_contains", default=None, metavar="SUBSTRING",
+                    help="the same filter 04_train.py gets: which attached run this "
+                         "one may resume from. Without it the epoch arithmetic below "
+                         "is done against whichever attached checkpoint has the most "
+                         "steps, which is not necessarily this experiment")
     ap.add_argument("--epochs", type=int, default=None)
     ap.add_argument("--extra_epochs", type=int, default=None)
     ap.add_argument("--time_budget_h", type=float, default=None)

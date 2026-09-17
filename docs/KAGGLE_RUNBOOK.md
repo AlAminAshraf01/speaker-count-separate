@@ -264,6 +264,53 @@ If joint training struggles, freeze the separator and train only the counter (~2
 If that cannot beat ~85 % with the leak mitigated, fall back to fixed-N=3 plus the
 interpretability work — and say so in the report.
 
+### 3.6 Pricing the silence term — the `SILOW` rerun · ~12 GPU-h over two sessions
+
+Optional, and only worth starting with the quota to finish it. It sharpens the separation
+finding; it will not move counting.
+
+Gate 2 changed two things at once — it dropped to a single speaker count *and* switched
+three objectives off — so its 7.40 dB against the pooled run's 0.50 dB cannot be assigned
+to either. `configs/silow.yaml` changes one: `paper.yaml` with `w_sil` cut from 1.0 to 0.1,
+still pooled N=1..5, still with the counting term, still 38 epochs against the same dev
+set. The silence penalty is the term worth pricing because it is not scale-invariant while
+SI-SDR is, so shrinking every slot at once zeroes it for free — `14_objective_ablation.py`
+watched it hit 0.000 within a hundred steps with separation nine decibels behind.
+
+| | epochs | GPU-h | val SI-SDR |
+|---|---|---|---|
+| pooled, `w_sil` 1.0 — the reference | 38 | ~13.5 | 0.50 dB |
+| pooled, `w_sil` 0.1 — this run | 38 | ~12 | ? |
+| fixed N=2, no silence term at all | 8 | 2.5 | 7.40 dB |
+
+In notebook 02, one line: `SILOW = True`. Everything else follows from it — the config, the
+checkpoint directory (`/kaggle/working/ckpt_silow`), the epoch target, and the resume
+filter. Then the ordinary resume loop: **Save Version → Save & Run All**, add this
+notebook's own output as an input, re-run. Session one stops on its 11-hour budget around
+epoch 35; session two finishes 36–38 in about 1.2 h.
+
+Evaluate it in notebook 04 with `ONLY = "ckpt_silow"`. That is not optional either: the
+rerun has ~38,000 steps against the reference's 50,800, and an empty `ONLY` ranks by step,
+so it would silently re-evaluate the reference and the two runs would appear identical.
+
+**The one way to waste the 12 hours** is session two resuming the wrong model.
+`find_resume` ranks attached checkpoints by global step and has no way to tell two
+experiments apart, so the reference checkpoint wins by 12,000 steps and the run continues
+*it* — under a loss its weights were never trained with. `--resume_contains ckpt_silow`
+pins the search, the notebook passes it automatically for `SILOW` and `GATE2`, and
+preflight does its epoch arithmetic against the same filter. If the filter excludes
+everything, the trainer says so and names what it threw away instead of quietly starting
+over at step 0.
+
+`RECOVER` is deliberately *not* pinned: resuming from the pooled run into a new directory
+is exactly what gate 6 does.
+
+Read it against 0.50 dB val SI-SDR / +1.2 dB test SI-SDRi. Clearly above and the silence
+term was a real tax on the real task, which the report can then price instead of quoting a
+single-batch number. About the same and the tax is an artefact of that single-batch setup,
+and the pooled five-count task is the whole cost — which is gate 2's finding, confirmed on
+the axis gate 2 left confounded. Both are results. Neither is a counting result.
+
 ---
 
 ## 4. Notebook 03 — hyperparameter search · **GPU** · 1.5–2.5 h, resumable
@@ -540,6 +587,8 @@ The meter is at the top-right of the notebook editor — read it *before* starti
 | 01 EDA and leak | **None** | 0 | CPU-only |
 | 02 train, full run | GPU | ~11 h/session × 2 | 40 epochs at ~19 min each |
 | 02 recover (count head only) | GPU | ~1.4 h | separator frozen: 331 ms/step, not 1045 |
+| 02 gate 2 (fixed N=2 control) | GPU | ~2.5 h | 8 epochs; the run that made the pipeline interpretable |
+| 02 `SILOW` (pooled, `w_sil` 0.1) | GPU | ~12 h × 1 | optional; 38 epochs over two sessions — §3.6 |
 | 03 hparam search | GPU | 1.5–2.5 h | optional; skip it if quota is tight |
 | 04 evaluate | GPU | 10–25 min | the deliverable |
 | 05 interpretability | GPU | 15–30 min | the deliverable |

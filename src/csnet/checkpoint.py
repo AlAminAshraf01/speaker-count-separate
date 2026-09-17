@@ -195,7 +195,8 @@ def checkpoint_step(path: str) -> int:
 
 def find_resume(explicit: str | None = None, work_dir: str = "/kaggle/working/ckpt",
                 search_inputs: bool = True,
-                input_root: str = "/kaggle/input") -> str | None:
+                input_root: str = "/kaggle/input",
+                contains: str | None = None) -> str | None:
     """Locate a checkpoint to resume from.
 
     Order: an explicit path, then ``<work_dir>/last.pt``, then the **furthest-along**
@@ -207,6 +208,14 @@ def find_resume(explicit: str | None = None, work_dir: str = "/kaggle/working/ck
     flip that, lost, silently restarts a multi-hour run from step 5 while reporting that it
     resumed. Rank by recorded global step and the question does not arise. mtime remains
     the tie-break for checkpoints whose step cannot be read.
+
+    ``contains`` narrows the input-dataset search to paths holding that substring -- the
+    run's own checkpoint directory name, ``"ckpt_silow"``. Ranking by step is the right
+    answer when one run is attached and the wrong one when two are: a short run resuming
+    beside a long one is handed the long one's weights, silently, and then trains them
+    under whatever loss *this* config specifies rather than the one they were grown with.
+    ``<work_dir>/last.pt`` is never filtered; it is this run's own directory by
+    construction.
     """
     if explicit and str(explicit).lower() not in {"none", "auto", ""}:
         return explicit if os.path.exists(explicit) else None
@@ -218,6 +227,8 @@ def find_resume(explicit: str | None = None, work_dir: str = "/kaggle/working/ck
     if search_inputs and os.path.isdir(input_root):
         candidates = glob.glob(os.path.join(input_root, "*", "**", "last.pt"), recursive=True)
         candidates = [c for c in candidates if os.path.isfile(c)]
+        if contains:
+            candidates = [c for c in candidates if contains in c.replace("\\", "/")]
         if candidates:
             return max(candidates, key=lambda c: (checkpoint_step(c), os.path.getmtime(c)))
     return None

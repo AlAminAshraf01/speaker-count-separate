@@ -124,6 +124,42 @@ def test_find_resume_picks_the_newest_input() -> None:
                        search_inputs=True, input_root=inputs) == paths[1]
 
 
+def test_find_resume_contains_pins_a_run_to_its_own_directory() -> None:
+    """A short run resuming beside a long one must not be handed the long one's weights.
+
+    Two experiments end up attached to the same session all the time -- the pooled
+    reference and whichever control is being run against it -- and ranking by global step
+    hands the control the reference's 50,800 steps every time. It resumes, it prints that
+    it resumed, and it then trains someone else's weights under this config's loss.
+    """
+    from csnet.checkpoint import find_resume, save_checkpoint
+
+    model, _ = _model_and_optimizer()
+    root = tempfile.mkdtemp()
+    inputs = os.path.join(root, "input")
+    reference = os.path.join(inputs, "train-v9", "ckpt", "last.pt")
+    mine = os.path.join(inputs, "train-v9", "ckpt_silow", "last.pt")
+    for path, step in ((reference, 50800), (mine, 12000)):
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        save_checkpoint(path, model=model, global_step=step)
+
+    work = os.path.join(root, "work")  # empty: a fresh Kaggle session
+    assert find_resume(None, work_dir=work, input_root=inputs) == reference
+    assert find_resume(None, work_dir=work, input_root=inputs,
+                       contains="ckpt_silow") == mine
+
+    # No match must mean no resume, not a fall back to the best available. Starting from
+    # scratch is recoverable and loud; continuing the wrong experiment is neither.
+    assert find_resume(None, work_dir=work, input_root=inputs,
+                       contains="ckpt_absent") is None
+
+    # The filter never applies to the working directory: that is this run's own output,
+    # written by this run, whatever it happens to be called.
+    save_checkpoint(os.path.join(work, "last.pt"), model=model, global_step=1)
+    assert find_resume(None, work_dir=work, input_root=inputs,
+                       contains="ckpt_absent") == os.path.join(work, "last.pt")
+
+
 def test_time_budget() -> None:
     from csnet.checkpoint import TimeBudget
 

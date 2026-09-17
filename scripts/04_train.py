@@ -57,6 +57,12 @@ def main() -> int:
     ap.add_argument("--ckpt_dir", default=None)
     ap.add_argument("--out", default=None, help="where logs go (default: ckpt_dir)")
     ap.add_argument("--resume", default="auto", help="auto | none | /path/to/last.pt")
+    ap.add_argument("--resume_contains", default=None, metavar="SUBSTRING",
+                    help="narrow --resume auto to attached paths holding this "
+                         "substring, e.g. ckpt_silow. Without it a short run resuming "
+                         "beside a longer one is handed the longer one's weights: "
+                         "find_resume ranks by step and cannot know they are "
+                         "different experiments")
     ap.add_argument("--time_budget_h", type=float, default=None)
     ap.add_argument("--device", default="auto")
     ap.add_argument("--extra_epochs", type=int, default=None,
@@ -195,7 +201,8 @@ def main() -> int:
     # ---------------------------------------------------------------- resume
     start_epoch, global_step, best_metric, history, consumed_h = 0, 0, float("-inf"), [], 0.0
     resume_path = find_resume(None if args.resume == "auto" else args.resume,
-                              work_dir=ckpt_dir, search_inputs=(args.resume == "auto"))
+                              work_dir=ckpt_dir, search_inputs=(args.resume == "auto"),
+                              contains=args.resume_contains)
     if args.resume.lower() == "none":
         resume_path = None
     if resume_path:
@@ -248,6 +255,18 @@ def main() -> int:
                   f"{ckpt_dir})")
     else:
         print("\nno checkpoint found -- starting from scratch")
+        if args.resume_contains and args.resume.lower() == "auto":
+            # Session two of an eleven-hour run starting over at step 0 looks exactly
+            # like session one. If the filter is what emptied the candidate list, say
+            # so and name what it threw away: that is the only distinguishing evidence.
+            nearest = find_resume(None, work_dir=ckpt_dir, search_inputs=True)
+            if nearest:
+                print(f"  --resume_contains {args.resume_contains!r} excluded every "
+                      f"attached checkpoint; the nearest was {nearest}")
+                print("  Correct for a fresh run. For a continuation, attach this "
+                      "run's own notebook")
+                print("  output under + Add Input and re-run before spending the "
+                      "session.")
 
     if torch.cuda.device_count() > 1 and cfg.train.dataparallel and device.type == "cuda":
         model = torch.nn.DataParallel(model)
