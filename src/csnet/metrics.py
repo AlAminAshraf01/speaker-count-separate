@@ -200,6 +200,12 @@ def format_confusion(confusion: np.ndarray, n_list: Sequence[int] = N_LIST,
     return "\n".join(lines)
 
 
+def _mean_of(key: str, group: Sequence[dict]) -> float:
+    """Mean of a per-source list field over the records that have one."""
+    values = [float(np.mean(r[key])) for r in group if r.get(key) is not None]
+    return float(np.mean(values)) if values else float("nan")
+
+
 def summarise_per_n(records: Sequence[dict], n_list: Sequence[int] = N_LIST) -> dict:
     """Group per-utterance records by true N and average the usual metrics.
 
@@ -225,6 +231,8 @@ def summarise_per_n(records: Sequence[dict], n_list: Sequence[int] = N_LIST) -> 
             "n_scored": len(correct),
             "si_sdri_count_correct": (float(np.mean([np.mean(r["si_sdri"]) for r in correct]))
                                       if correct else float("nan")),
+            "si_sdri_oracle": _mean_of("si_sdri_oracle", group),
+            "n_oracle": sum(1 for r in group if r.get("si_sdri_oracle") is not None),
             "input_si_sdr": (float(np.mean([r["input_si_sdr"] for r in group
                                             if r.get("input_si_sdr") is not None]))
                              if any(r.get("input_si_sdr") is not None for r in group)

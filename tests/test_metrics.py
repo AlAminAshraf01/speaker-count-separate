@@ -258,6 +258,47 @@ def test_counted_and_scored_are_reported_separately() -> None:
     assert abs(stats["si_sdri_count_correct"] - 2.0) < 1e-9
 
 
+def test_separation_is_measurable_even_when_counting_fails() -> None:
+    """SI-SDRi(cc) is gated on the counter, so a broken counter erases the separation.
+
+    That happened: in fp32 the counting head answered "1 speaker" for almost everything,
+    every count-correct subset at N>1 emptied, and the per-N separation table became a
+    column of NaN. The oracle column uses the true N regardless of the prediction, so the
+    separation result survives a counting failure instead of disappearing with it.
+    """
+    import torch
+
+    from csnet.engine import batch_records
+    from csnet.metrics import summarise_per_n
+
+    rng = np.random.default_rng(5)
+    T = 8000
+    pair = rng.standard_normal((2, T)).astype(np.float32)
+    refs = np.zeros((1, 5, T), dtype=np.float32)
+    refs[0, :2] = pair
+    mix = pair.sum(axis=0)[None, :]
+    est = rng.standard_normal((1, 6, T)).astype(np.float32)
+    est[0, :2] = pair + 0.05 * rng.standard_normal((2, T))
+
+    logits = np.full((1, 5), -10.0, dtype=np.float32)
+    logits[0, 0] = 10.0                       # says N=1 when the truth is N=2
+
+    out = {"est": torch.from_numpy(est), "count_logits": torch.from_numpy(logits)}
+    batch = {"refs": torch.from_numpy(refs), "mix": torch.from_numpy(mix),
+             "n_src": torch.tensor([2]), "is_noisy": torch.tensor([0]),
+             "snr_db": torch.tensor([0.0])}
+    records = batch_records(out, batch, max_n_src=5)
+
+    assert records[0]["si_sdri"] is None, "miscounted, so the gated metric is undefined"
+    assert records[0]["si_sdri_oracle"] is not None, "the oracle metric must survive"
+    assert min(records[0]["si_sdri_oracle"]) > 5.0, records[0]["si_sdri_oracle"]
+
+    stats = summarise_per_n(records, [2])[2]
+    assert not np.isfinite(stats["si_sdri_count_correct"]), stats
+    assert np.isfinite(stats["si_sdri_oracle"]), stats
+    assert stats["n_oracle"] == 1, stats
+
+
 CHECKS = {name: fn for name, fn in sorted(globals().items()) if name.startswith("test_")}
 
 if __name__ == "__main__":

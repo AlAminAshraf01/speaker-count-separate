@@ -248,6 +248,7 @@ def main() -> int:
     # ---------------------------------------------------------- 2 & 3. separation
     banner("2 & 3 - separation")
     print(f"P-SI-SNR over the whole test set : {results['p_si_snr']:8.2f} dB")
+    print(f"SI-SDRi with the true N (oracle)  : {results.get('sisdri_oracle', float('nan')):8.2f} dB")
     print(f"SI-SDRi on count-correct subset  : {results['sisdri_count_correct']:8.2f} dB")
     print(f"input SI-SDR (unprocessed)       : {results['input_si_sdr']:8.2f} dB")
     degenerate = int(results.get("n_degenerate", 0))
@@ -261,15 +262,20 @@ def main() -> int:
     per_n_rows = []
     for n, stats in results["per_n"].items():
         per_n_rows.append([n, stats["n"], round(stats["count_acc"] * 100, 1),
-                           round(stats["p_si_snr"], 2), stats["n_count_correct"],
+                           round(stats["p_si_snr"], 2),
+                           round(stats.get("si_sdri_oracle", float("nan")), 2),
+                           stats["n_count_correct"],
                            stats.get("n_scored", stats["n_count_correct"]),
                            round(stats["si_sdri_count_correct"], 2),
                            round(stats["input_si_sdr"], 2)])
     # "n counted" and "n scored" differ only where the input already was the reference,
     # which is N=1 and clean. Printing one number for both invites the reader to check
     # count % x mixes against it, find a mismatch, and distrust the rest of the table.
-    per_n_header = ["N", "mixes", "count %", "P-SI-SNR", "n counted", "n scored",
-                    "SI-SDRi(cc)", "input SI-SDR"]
+    # SI-SDRi(oracle) is the separation number that does not vanish when the counter
+    # fails: it uses the true N regardless of what was predicted. SI-SDRi(cc) is the
+    # literature-comparable one, and it is NaN wherever nothing was counted correctly.
+    per_n_header = ["N", "mixes", "count %", "P-SI-SNR", "SI-SDRi(oracle)",
+                    "n counted", "n scored", "SI-SDRi(cc)", "input SI-SDR"]
     print(format_table(per_n_rows, per_n_header))
     report["per_n"] = results["per_n"]
     report["overall"] = {k: results[k] for k in

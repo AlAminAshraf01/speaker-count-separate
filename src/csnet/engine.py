@@ -197,8 +197,16 @@ def batch_records(out: dict, batch: dict, max_n_src: int = MAX_N_SRC) -> list[di
             "input_si_sdr": float(np.mean([si_sdr(mix[b], s) for s in sources])),
             "p_si_snr": float(p_si_snr(est[b], sources, n_true, n_pred, max_n_src=max_n_src)),
             "si_sdri": None,
+            "si_sdri_oracle": None,
             "n_degenerate": 0,
         }
+        # Separation measured against the true count, whatever the counter said. The
+        # count-correct number is the one comparable to fixed-N literature, but it is
+        # gated on the counter: when counting collapses, that column becomes NaN and the
+        # separation result disappears with it -- which is exactly what happened here.
+        # This one does not go away.
+        oracle, _ = usable_si_sdri(est[b, :max_n_src], sources, mix[b], n_true)
+        record["si_sdri_oracle"] = oracle.tolist() or None
         if n_pred == n_true:
             usable, dropped = usable_si_sdri(est[b, :max_n_src], sources, mix[b], n_true)
             # None, not [], so every `si_sdri is not None` test downstream keeps working:
@@ -265,6 +273,10 @@ def evaluate(model: torch.nn.Module, loader: Any, loss_fn: torch.nn.Module,
         result["p_si_snr"] = float(np.mean([r["p_si_snr"] for r in records]))
         result["sisdri_count_correct"] = (
             float(np.mean([np.mean(r["si_sdri"]) for r in correct])) if correct else float("nan"))
+        oracle_rows = [r for r in records if r.get("si_sdri_oracle") is not None]
+        result["sisdri_oracle"] = (
+            float(np.mean([np.mean(r["si_sdri_oracle"]) for r in oracle_rows]))
+            if oracle_rows else float("nan"))
         result["input_si_sdr"] = float(np.mean([r["input_si_sdr"] for r in records]))
         result["n_degenerate"] = int(sum(r.get("n_degenerate", 0) for r in records))
         result["per_n"] = summarise_per_n(records, n_list)
