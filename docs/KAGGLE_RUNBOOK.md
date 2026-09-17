@@ -357,6 +357,20 @@ it is not a property of the audio: change the arithmetic and 84 % of the answers
 Report the fp32 number, and report the gap as the finding. `scripts/11_inspect_count_head.py
 --compare_precision` shows where the two paths diverge.
 
+`scripts/11_inspect_count_head.py --compare_precision` says where the two arithmetics part
+company, and it is **not** at the classifier:
+
+| quantity | fp16 vs fp32 |
+|---|---|
+| pooled features | max delta 3.96 = **47 % of their maximum** |
+| logits | max delta 5.01 = **202 % of the within-sample spread** |
+| predictions agreeing | 17.2 % |
+
+So the divergence is already present in the pooled mean/std that feed the head, at half
+the magnitude of the features themselves. And in fp32 those pooled statistics barely move
+between a one-speaker mixture and a five-speaker one. The head was never reading a speaker
+count; fp16 arithmetic on the pooled statistics produced something that correlated with one.
+
 Evaluation and in-training validation both run fp32 now, for that reason.
 
 ### Gate 2 is the number that matters

@@ -69,9 +69,15 @@ def main() -> int:
         raise SystemExit("checkpoint has no config; cannot rebuild the model")
     print(f"epoch : {state.get('epoch')}   step: {state.get('global_step')}")
 
+    from csnet.utils import pick_device
+
+    device = pick_device(None if args.device == "auto" else args.device)
     model = build_model(cfg.model)
     load_checkpoint(ckpt_path, model=model, map_location="cpu", restore_rng=False)
-    model.eval()
+    # On the GPU because this runs inside a GPU session: the fp32 pass took six and a
+    # half minutes on the CPU while two T4s sat idle.
+    model.to(device).eval()
+    print(f"device: {device}")
 
     recipes = resolve(args.recipes_dev) or os.path.join(
         resolve(cfg.data.recipes_dir) or cfg.data.recipes_dir, cfg.data.recipes_dev)
@@ -104,16 +110,16 @@ def main() -> int:
             if i >= args.batches:
                 break
             batches.append(batch)
-            out = model(batch["mix"])
+            out = model(batch["mix"].to(device))
             preds.append(out["count_logits"].argmax(dim=-1).cpu().numpy())
             labels.append(batch["cls"].cpu().numpy())
     for handle in handles:
         handle.remove()
 
-    pooled = torch.cat([a for a, _ in captured["fc1"]]).numpy()      # (N, 2*hidden)
-    pre_act = torch.cat([b for _, b in captured["fc1"]]).numpy()     # (N, hidden)
-    hidden_in = torch.cat([a for a, _ in captured["fc2"]]).numpy()   # (N, hidden) post-relu
-    logits = torch.cat([b for _, b in captured["fc2"]]).numpy()      # (N, n_classes)
+    pooled = torch.cat([a for a, _ in captured["fc1"]]).float().cpu().numpy()      # (N, 2*hidden)
+    pre_act = torch.cat([b for _, b in captured["fc1"]]).float().cpu().numpy()     # (N, hidden)
+    hidden_in = torch.cat([a for a, _ in captured["fc2"]]).float().cpu().numpy()   # (N, hidden) post-relu
+    logits = torch.cat([b for _, b in captured["fc2"]]).float().cpu().numpy()      # (N, n_classes)
     labels = np.concatenate(labels)
     preds = np.concatenate(preds)
 
@@ -133,9 +139,14 @@ def main() -> int:
         ["logit spread within a sample", f"{logit_spread_per_sample:.4f}"],
         ["logit variation across samples", f"{logit_var_across_samples:.4f}"],
         ["pooled feature variation", f"{pooled_var:.4f}"],
+        # The absolute number means nothing without a scale. 0.0058 sounds small and is
+        # small -- but only because the features it is measured against are of order 1.
+        ["  as a fraction of their magnitude",
+         f"{100 * pooled_var / (float(np.abs(pooled).mean()) + 1e-12):.1f} %"],
         ["fc1 units never active", f"{dead_units} of {pre_act.shape[1]}"],
         ["post-ReLU values that are zero", f"{100 * hidden_all_zero:.1f} %"],
-        ["fc2 bias", np.array2string(head.fc2.bias.detach().numpy(), precision=3)],
+        ["fc2 bias", np.array2string(head.fc2.bias.detach().float().cpu().numpy(),
+                                     precision=3)],
     ]
     print()
     print(format_table(rows, ["measurement", "value"]))
@@ -148,14 +159,10 @@ def main() -> int:
 
     # ------------------------------------------------------- precision divergence
     if args.compare_precision:
-        from csnet.utils import pick_device
-
-        device = pick_device(None if args.device == "auto" else args.device)
         if device.type != "cuda":
             print()
             print("--compare_precision needs a GPU; autocast does nothing on CPU.")
         else:
-            model.to(device)
             captured.clear()
             handles = [head.fc1.register_forward_hook(grab("fc1")),
                        head.fc2.register_forward_hook(grab("fc2"))]
@@ -191,9 +198,17 @@ def main() -> int:
 
     # ---------------------------------------------------------------- verdict
     banner("verdict")
-    if pooled_var < 1e-6:
-        print("CONSTANT FEATURES: the pooled statistics are identical for every input, so")
-        print("no head could tell the classes apart. The problem is upstream of the head.")
+    # Relative, not absolute. An earlier run measured pooled variation of 0.0058 against
+    # a pooled magnitude of order 1 -- features that barely move between a one-speaker
+    # mixture and a five-speaker one -- and the 1e-6 threshold sailed past it, reporting
+    # "simply inaccurate" for a head whose inputs carry almost nothing.
+    pooled_scale = float(np.abs(pooled).mean()) + 1e-12
+    pooled_ratio = pooled_var / pooled_scale
+    if pooled_ratio < 0.05:
+        print(f"CONSTANT FEATURES: the pooled statistics vary by {100 * pooled_ratio:.1f} % of")
+        print("their own magnitude across inputs, so there is almost nothing for any head to")
+        print("separate. The problem is upstream of the head: whatever the separator encodes")
+        print("about how many people are talking is not reaching the pooled statistics.")
     elif dead_units == pre_act.shape[1]:
         print("DEAD HIDDEN LAYER: every fc1 unit is negative for every sample, so ReLU")
         print("zeroes the whole layer and fc2 can only emit its bias. That bias settles on")
