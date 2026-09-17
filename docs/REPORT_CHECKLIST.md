@@ -156,7 +156,9 @@ Framing: the count head is an interpretability probe, not a second project.
 - [ ] Noise is synthetic (white/pink/brown/babble from held-out speakers) unless a real noise
       corpus was attached. **No reverberation anywhere.** 8 kHz, single channel, anechoic.
 - [ ] The counting head is trained and evaluated on 3 s crops; the long-file aggregation in
-      `08_infer.py` is a demo, not a validated result.
+      `08_infer.py` is a demo, not a validated result. It is **off by default** there: in
+      fp32 the head answers 1 for 1,445 of 1,500 test mixtures, so the demo would have
+      headlined a constant. Say so in the report rather than letting the omission pass.
 - [ ] Report SI-SDR **improvement**, not raw SI-SDR — input SI-SDR itself falls with N.
 - [ ] The test set was frozen before training and never regenerated (`recipes_test.csv` +
       seed are committed to the repo).

@@ -448,7 +448,7 @@ def dict_to_cfg(d) -> Cfg
 | `05_hparam_search.py` | speaker-disjoint K-fold search, resumable via a results JSON |
 | `06_evaluate.py` | confusion matrix, P-SI-SNR, per-N SI-SDRi, oracle masks |
 | `07_interpret.py` | filterbank, mask statistics vs N, count-head probes, filter ablation |
-| `08_infer.py` | any wav in -> `n_speakers` + separated wavs out |
+| `08_infer.py` | any wav in -> one separated wav per speaker slot, ranked by energy. The count is opt-in behind `--count` and off by default |
 
 Every long-running script must print, on clean exit or budget expiry, a block:
 ```

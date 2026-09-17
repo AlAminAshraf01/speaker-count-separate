@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""The product: any audio file in, "there are K people" + K clean speech tracks out.
+"""The product: any audio file in, one clean speech track per speaker slot out.
 
     python scripts/08_infer.py --ckpt ckpt/best.pt --input meeting.mp3 --out separated/
 
@@ -9,9 +9,13 @@ slot 4 in window 8, so windows are **permutation-aligned** against the previous 
 overlap region before being cross-faded together. Without that, speakers swap tracks every
 few seconds.
 
-The per-window counts are aggregated (median by default). Note the honest caveat: the
-count head was trained and validated on 3-second fully-overlapped crops, so this
-long-file aggregation is a demonstration, not a validated result.
+**The predicted speaker count is not printed unless you ask for it with ``--count``.** On
+the trained checkpoint that head is a constant predictor in fp32 -- it answers "1" for
+1,445 of 1,500 test mixtures -- so putting it at the top of a demo headlines a number that
+is the same whoever is talking. Counting is measured in ``06_evaluate.py``, against the
+naive floor and with the full confusion matrix, which is where a negative result can be
+read as one. Here every speaker slot is written and ranked by energy instead: a slot the
+model left unused is the near-silent row at the bottom of the dB column.
 """
 
 from __future__ import annotations
@@ -38,6 +42,9 @@ def main() -> int:
     ap.add_argument("--agg", default="mean_logit", choices=["mean_logit", "median", "majority"])
     ap.add_argument("--device", default="auto")
     ap.add_argument("--batch_size", type=int, default=8)
+    ap.add_argument("--count", action="store_true",
+                    help="also predict the speaker count, print it, and keep only that "
+                         "many tracks. Off by default -- see the module docstring")
     ap.add_argument("--keep_noise", action="store_true", default=True)
     ap.add_argument("--no_noise", dest="keep_noise", action="store_false")
     args = ap.parse_args()
@@ -74,30 +81,40 @@ def main() -> int:
                            agg={"mean_logit": "mean_prob"}.get(args.agg, args.agg))
     n_speaker_slots = cfg.model.max_n_src
     separated, probs, starts = result["est"], result["probs"], range(result["n_windows"])
-    per_window = np.array([class_to_n(int(c)) for c in probs.argmax(axis=1)])
-    n_speakers = int(class_to_n(result["cls"]))
-    confidence = float(probs.mean(axis=0).max())
-
-    banner(f"DETECTED {n_speakers} SPEAKER{'S' if n_speakers != 1 else ''}"
-           f"   (confidence {confidence * 100:.1f} %)")
-    dist = probs.mean(axis=0)
-    print(format_table([[class_to_n(i), round(float(dist[i]) * 100, 1),
-                         int((per_window == class_to_n(i)).sum())]
-                        for i in range(len(dist))],
-                       ["N", "mean prob %", "windows voting"]))
-    print(f"\n{len(starts)} windows of {args.win:g} s, hop {args.hop:g} s, "
-          f"aggregation '{args.agg}'")
-
-    # Rank speaker slots by energy and keep the n_speakers loudest.
     energies = (separated[:n_speaker_slots] ** 2).mean(axis=1)
-    order = np.argsort(-energies)[:n_speakers]
+    n_speakers = confidence = per_window = dist = None
+
+    if args.count:
+        per_window = np.array([class_to_n(int(c)) for c in probs.argmax(axis=1)])
+        n_speakers = int(class_to_n(result["cls"]))
+        confidence = float(probs.mean(axis=0).max())
+        banner(f"DETECTED {n_speakers} SPEAKER{'S' if n_speakers != 1 else ''}"
+               f"   (confidence {confidence * 100:.1f} %)")
+        dist = probs.mean(axis=0)
+        print(format_table([[class_to_n(i), round(float(dist[i]) * 100, 1),
+                             int((per_window == class_to_n(i)).sum())]
+                            for i in range(len(dist))],
+                           ["N", "mean prob %", "windows voting"]))
+        order = np.argsort(-energies)[:n_speakers]
+    else:
+        banner("SEPARATED TRACKS")
+        # Every slot, loudest first. With no count there is nothing to truncate at, and
+        # the dB column is the honest substitute: a slot the model left empty sits far
+        # below the ones carrying a voice, and you can hear which is which.
+        order = np.argsort(-energies)
+
+    print(f"\n{len(starts)} windows of {args.win:g} s, hop {args.hop:g} s"
+          + (f", count aggregation '{args.agg}'" if args.count else ""))
+
     peak = float(np.abs(audio).max()) + 1e-9
 
     written = []
     for rank, slot in enumerate(order, start=1):
         track = separated[int(slot)]
         track = track / (np.abs(track).max() + 1e-9) * min(0.95, peak * 2.0)
-        path = os.path.join(out_dir, f"speaker{rank}.wav")
+        # "speaker3.wav" asserts a third person exists. Without a count nothing has
+        # asserted that, so the files are numbered tracks and the dB column decides.
+        path = os.path.join(out_dir, f"{'speaker' if args.count else 'track'}{rank}.wav")
         write_wav(path, track.astype(np.float32), SR)
         written.append({"file": os.path.basename(path), "slot": int(slot),
                         "energy_db": float(10 * np.log10(energies[int(slot)] + 1e-12))})
@@ -114,13 +131,20 @@ def main() -> int:
         "input": os.path.abspath(resolve(args.input) or args.input),
         "checkpoint": ckpt_path,
         "duration_seconds": duration,
-        "n_speakers": n_speakers,
-        "confidence": confidence,
-        "count_distribution": {int(class_to_n(i)): float(dist[i]) for i in range(len(dist))},
-        "per_window_counts": per_window.tolist(),
-        "window_seconds": args.win, "hop_seconds": args.hop, "aggregation": args.agg,
+        "n_windows": len(starts),
+        "window_seconds": args.win, "hop_seconds": args.hop,
+        "counted": bool(args.count),
         "outputs": written,
     }
+    if args.count:
+        summary.update({
+            "n_speakers": n_speakers,
+            "confidence": confidence,
+            "count_distribution": {int(class_to_n(i)): float(dist[i])
+                                   for i in range(len(dist))},
+            "per_window_counts": per_window.tolist(),
+            "aggregation": args.agg,
+        })
     json_dump_atomic(summary, os.path.join(out_dir, "summary.json"))
 
     print(f"\nwrote {len(written)} files to {out_dir}:")
@@ -128,10 +152,13 @@ def main() -> int:
         print(f"  {item['file']:<14s} slot {item['slot']}  "
               f"{item['energy_db']:+6.1f} dB")
     print(f"  summary.json")
-    print("\nCaveat for the report: the count head was trained on 3 s fully-overlapped")
-    print("crops. Aggregating window votes over a long, sparsely-overlapped recording is")
-    print("a demonstration, not a validated result -- real conversation is a diarisation")
-    print("problem, not a spectral-density judgement.")
+    if args.count:
+        print("\nCaveat for the report: the count head was trained on 3 s fully-overlapped")
+        print("crops. Aggregating window votes over a long, sparsely-overlapped recording is")
+        print("a demonstration, not a validated result -- real conversation is a diarisation")
+        print("problem, not a spectral-density judgement.")
+    else:
+        print("\nNo speaker count is reported here by design; 06_evaluate.py measures it.")
     return 0
 
 

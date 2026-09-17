@@ -162,6 +162,49 @@ def test_no_notebook_picks_a_checkpoint_by_name() -> None:
         assert "ckpts[0]" not in text, f"{name} still picks a checkpoint by path order"
 
 
+
+def _count_only_summary_keys() -> set:
+    """The ``summary.json`` keys ``08_infer.py`` writes only when ``--count`` is passed.
+
+    Read out of its syntax tree rather than hard-coded here, so adding a sixth key to that
+    branch extends this test instead of silently escaping it.
+    """
+    path = os.path.join(REPO_ROOT, "scripts", "08_infer.py")
+    with io.open(path, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read())
+    keys = set()
+    for node in ast.walk(tree):
+        if not (isinstance(node, ast.If) and ast.unparse(node.test) == "args.count"):
+            continue
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Dict):
+                keys |= {k.value for k in inner.keys
+                         if isinstance(k, ast.Constant) and isinstance(k.value, str)}
+    return keys
+
+
+def test_the_demo_notebook_never_reads_a_count_it_did_not_ask_for() -> None:
+    """Two halves that must move together, or Kaggle raises KeyError after the model ran.
+
+    The demo used to headline ``summary['n_speakers']``. That head is a constant predictor
+    in fp32, so the count is now opt-in behind ``--count`` and the notebook does not pass
+    it. Re-adding either half alone breaks the cell -- and only on Kaggle, minutes in.
+    """
+    with io.open(os.path.join(SRC_DIR, "kaggle_06_demo_inference.py"), encoding="utf-8") as fh:
+        source = fh.read()
+    # Joined with spaces, not newlines: every token below sits on one line, and
+    # this file has been broken twice by an escaped newline inside a heredoc.
+    code = " ".join(l for l in source.splitlines() if not l.lstrip().startswith("#"))
+    if "--count" in code:
+        return  # it asked for the count, so reading those keys back is legitimate
+    guarded = _count_only_summary_keys()
+    assert guarded, "08_infer.py no longer gates any summary key on --count"
+    for key in sorted(guarded):
+        assert f'"{key}"' not in code and f"'{key}'" not in code, (
+            f"kaggle_06_demo_inference.py reads summary[{key!r}], which 08_infer.py writes "
+            f"only under --count -- that cell would raise KeyError on Kaggle")
+
+
 CHECKS = {name: fn for name, fn in sorted(globals().items()) if name.startswith("test_")}
 
 if __name__ == "__main__":

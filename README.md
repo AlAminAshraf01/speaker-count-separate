@@ -82,7 +82,7 @@ speaker-count-separate/
 | `05_hparam_search.py` | **3** | speaker-disjoint K-fold search, resumable |
 | `06_evaluate.py` | **5a** | `eval_report.md` — paste it straight into the report |
 | `07_interpret.py` | **2** + **5b** | filterbank, mask geometry vs N, filter ablation |
-| `08_infer.py` | — | any audio in → speaker count + clean tracks out |
+| `08_infer.py` | — | any audio in → clean tracks out (`--count` adds the count) |
 | `09_publish_dataset.py` | — | publish the packed store as a real Kaggle Dataset (optional) |
 | `10_memory_bisect.py` | — | which component leaks host RAM, one subprocess per configuration |
 | `11_inspect_count_head.py` | — | why a counting head sits at chance: dead layer, flat features, or just wrong |

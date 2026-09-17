@@ -452,13 +452,23 @@ deliverable (mask geometry vs N, count-confidence correlation, filter ablation).
 
 ## 7. Notebook 06 — the demo · any accelerator · seconds
 
-**Inputs:** `02_train` output (+ `00_build_dataset` to demo on test mixtures).
+**Inputs:** `02_train` output **and** `00_build_dataset` output. Both. Attach the same
+`02_train` version you gave notebooks 04 and 05, so the checkpoint is the pooled model rather
+than the gate-2 control — the first cell prints which one it picked. Run it on **CPU**.
 
-Any audio file in → "there are K people" + K clean tracks + the isolated noise. Upload your own
-recording via **+ Add Input → Upload → New Dataset**.
+Any audio file in → one clean track per speaker slot, loudest first, plus the isolated noise.
+Upload your own recording via **+ Add Input → Upload → New Dataset**.
 
-Worth trying: a single speaker (does it say **1**?), two people talking over each other, a clip
-with music underneath.
+**It prints no speaker count.** `08_infer.py` hides that behind `--count`, and the notebook does
+not pass it: in fp32 the head answers 1 for 1,445 of 1,500 test mixtures, so the line said the
+same thing whoever was talking. Counting is measured in notebook 04 — against the naive floor,
+with the confusion matrix — which is where a negative result is readable as one. Flip the flag
+once the head works.
+
+Read the dB column instead: a slot the model left unused sits far below the ones carrying a
+voice, so the tracks you can hear a person in are the separator's own answer to "how many".
+
+Worth trying: a single speaker, two people talking over each other, a clip with music underneath.
 
 ---
 

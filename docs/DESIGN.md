@@ -348,4 +348,5 @@ but *loses* to them at 3 — which is exactly why the ideal-mask baselines stay 
 * 8 kHz, single channel, anechoic. Nothing here transfers to far-field or multi-channel
   without retraining.
 * The count head is trained and evaluated on 3 s crops. Long-file counting in
-  `08_infer.py` aggregates per-window predictions and is *not* separately validated.
+  `08_infer.py` aggregates per-window predictions and is *not* separately validated, which
+  is why that aggregation now sits behind `--count` and the demo notebook leaves it off.

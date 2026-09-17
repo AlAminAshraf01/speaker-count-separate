@@ -1,11 +1,21 @@
 # %% [markdown]
-# # 06 - Demo: any audio file in, speaker count + clean tracks out
+# # 06 - Demo: any audio file in, clean tracks out
 #
 # **Accelerator: GPU T4 or None.** **Runtime: seconds per file.**
 #
-# This is the product the project describes: give it a recording with an unknown number of
-# talkers plus background noise, and it tells you **how many people are speaking** and hands
-# back **one clean waveform per speaker** (plus the isolated noise).
+# Give it a recording with several talkers plus background noise, and it hands back **one
+# clean waveform per speaker slot** (plus the isolated noise), ranked loudest first.
+#
+# ## Why there is no "N speakers detected" line
+#
+# There was one, and it has been removed. In fp32 this checkpoint's counting head answers
+# **1** for almost every input, so that line printed the same number whoever was talking -
+# a headline that looks like a result and carries no information about the audio.
+#
+# The counting result is **not** being hidden: notebook `04` measures it properly, against
+# the naive floor and with the full confusion matrix, which is where a negative result can
+# be read as one. A demo is the wrong place to report it. Pass `--count` to `08_infer.py`
+# if you ever want it back - after the head is fixed, that is the flag to flip.
 #
 # ## How long files are handled
 #
@@ -15,12 +25,16 @@
 # region (correlate, then solve the assignment) before being cross-faded in. Without that,
 # speakers swap tracks every few seconds.
 #
-# Per-window counts are aggregated by averaging the softmax.
-#
 # ## Before you run
 #
-# **+ Add Input -> Notebook Output ->** `02_train` (for `best.pt`), and `00_build_dataset` if
-# you want to demo on the frozen test mixtures.
+# **+ Add Input -> Notebook Output ->** both of these:
+#
+# * `02_train` - for `best.pt`. Attach the **same version you gave notebooks 04 and 05**, so
+#   the checkpoint printed below is the pooled model and not the gate-2 control.
+# * `00_build_dataset` - for the source store the demo mixture is built from.
+#
+# `00` is not optional in practice: with no store attached and no upload, there is nothing
+# to feed the model and the audio preview below has no file to play.
 #
 # To use **your own recording**: **+ Add Input -> Upload -> New Dataset**, then point
 # `INPUT_FILE` at it. Any format and sample rate; it is resampled to 8 kHz internally.
@@ -34,13 +48,14 @@ sys.path.insert(0, os.path.join(REPO, "scripts"))
 from _common import autodetect_ckpt, autodetect_store
 
 # Which run to demo. Empty picks the furthest-along checkpoint, which is the pooled model
-# -- the right one here, because this notebook's whole claim is "unknown number of talkers
-# in, one track per talker out" and only the pooled model has a counting head that was
-# trained. The gate-2 control cannot answer "how many", so demoing it would misrepresent
-# the system.
+# -- the right one here, because the pooled model is the system the report is about: it
+# handles N=1..5 in one network. Gate 2 will sound better on a two-speaker clip (7.40 dB
+# against 0.50 dB val SI-SDR), but it only ever saw N=2 and is a control, not the system.
+# Demo it by name if you want to show what the separator can do when the task is fixed --
+# and say which one you are playing.
 #   ""            the main pooled N=1..5 model
 #   "ckpt_count"  the same thing, pinned
-#   "ckpt_gate2"  the fixed-N=2 control -- separation only, counting is untrained
+#   "ckpt_gate2"  the fixed-N=2 control -- separates better, N=2 only
 #   "ckpt_silow"  the pooled rerun at w_sil 0.1 -- a fair demo subject, though its spare
 #                 slots were only weakly penalised, so expect more leakage into them
 ONLY = ""
@@ -97,22 +112,28 @@ display(Audio(INPUT_FILE))
 # ## Run it
 
 # %%
+# No --count: the speaker count is measured in notebook 04, not headlined here. See the
+# note at the top. --agg only selects how per-window counts are pooled, so it is gone too.
 run(f"python scripts/08_infer.py"
     f" --ckpt {CKPT}"
     f" --input {INPUT_FILE}"
     f" --out /kaggle/working/separated"
-    f" --win 3.0 --hop 1.5"
-    f" --agg mean_logit")
+    f" --win 3.0 --hop 1.5")
 
 # %% [markdown]
 # ## Listen to the result
+#
+# One track per speaker slot, loudest first, then the isolated noise. Read the dB column
+# alongside: a slot the model did not use sits well below the ones carrying a voice, so the
+# number of tracks you can actually hear a person in **is** the model's answer to "how
+# many" - just an answer you read off the separator instead of the counting head.
 
 # %%
 import json
 
 summary = json.load(open("/kaggle/working/separated/summary.json"))
-print(f"DETECTED {summary['n_speakers']} SPEAKERS  "
-      f"(confidence {summary['confidence'] * 100:.1f} %)\n")
+print(f"{summary['duration_seconds']:.1f} s input, {summary['n_windows']} windows, "
+      f"{len(summary['outputs'])} tracks out\n")
 
 for item in summary["outputs"]:
     path = os.path.join("/kaggle/working/separated", item["file"])
@@ -140,15 +161,18 @@ if truths:
 #
 # * a phone recording of two people talking over each other,
 # * a podcast clip with music underneath,
-# * a single speaker (does it correctly say **1**?),
+# * a single speaker (does one track hold the voice and the rest go quiet?),
 # * silence (what does it do? note the answer honestly - the model was never trained on it).
 #
 # ## The caveat that must go in the report
 #
-# The count head was trained and validated on **3-second, fully-overlapped** crops. Aggregating
-# window votes over a long, sparsely-overlapped recording is a **demonstration, not a validated
-# result**. Real conversation is sparse, speakers take turns, and counting there is a
-# diarisation problem rather than a single judgement about spectral density.
+# This notebook is a **demonstration, not a validated result**. The model was trained and
+# validated on 3-second, fully-overlapped, 8 kHz crops; a long, sparsely-overlapped recording
+# is outside that. The number that counts is the frozen test set in notebook `04`.
 #
-# Say that plainly. A demo that works is worth showing; a demo presented as an evaluation is
-# not.
+# Say plainly that the demo reports no speaker count, and why: notebook `04` measures the
+# counting head at **20.0 %** in fp32 against a **35.0 %** naive floor, and it answers "1"
+# for 1,445 of 1,500 test mixtures. A constant predictor at the top of a demo would look
+# like a result and be none, so it was removed from the demo and left in the evaluation.
+# That sentence is worth more in a report than a working demo would be - it says you read
+# your own numbers.
